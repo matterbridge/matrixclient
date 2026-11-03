@@ -150,7 +150,7 @@ func (c *Client) loginToken(ctx context.Context) error {
 
 	// Whoami may omit the device ID, only then is the configured one trusted.
 	if resp.DeviceID != "" && c.cred.DeviceID != "" && resp.DeviceID != c.cred.DeviceID {
-		return errors.New("matrixclient: token belongs to device "+resp.DeviceID.String()+", not the configured "+c.cred.DeviceID.String())
+		return errors.New("matrixclient: token belongs to device " + resp.DeviceID.String() + ", not the configured " + c.cred.DeviceID.String())
 	}
 
 	c.mc.UserID = resp.UserID
