@@ -16,7 +16,8 @@ type Credentials struct {
 	// Token logs in with an existing access token instead of Login and Pass.
 	// The token cannot be renewed, so it is not refreshed once it expires.
 	Token string
-	// DeviceID is the device the token belongs to. Optional, looked up when empty.
+	// DeviceID is the device the token belongs to. Optional, looked up when empty,
+	// and a mismatch with the device the server reports for the token is an error.
 	// With e2ee, the key database is bound to this device: a different device
 	// fails to start instead of reusing or overwriting the stored keys.
 	DeviceID id.DeviceID
