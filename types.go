@@ -12,6 +12,12 @@ type Credentials struct {
 	Server string
 	Login  string
 	Pass   string
+
+	// Token logs in with an existing access token instead of Login and Pass.
+	// The token cannot be renewed, so it is not refreshed once it expires.
+	Token string
+	// DeviceID is the device the token belongs to. Optional, looked up when empty.
+	DeviceID id.DeviceID
 }
 
 // User is a Matrix user as seen in room state.
