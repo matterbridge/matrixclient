@@ -161,7 +161,7 @@ func (c *Client) handleCanonicalAlias(_ context.Context, ev *event.Event) {
 }
 
 func (c *Client) handleMessage(_ context.Context, ev *event.Event) {
-	if ev.Sender == c.mc.UserID {
+	if ev.Sender == c.mc.UserID || !c.synced.Load() {
 		return
 	}
 
@@ -214,7 +214,7 @@ func (c *Client) handleMessage(_ context.Context, ev *event.Event) {
 }
 
 func (c *Client) handleReaction(_ context.Context, ev *event.Event) {
-	if ev.Sender == c.mc.UserID {
+	if ev.Sender == c.mc.UserID || !c.synced.Load() {
 		return
 	}
 
@@ -234,7 +234,7 @@ func (c *Client) handleReaction(_ context.Context, ev *event.Event) {
 
 func (c *Client) handleRedaction(_ context.Context, ev *event.Event) {
 	h, ok := c.handler.(RedactionHandler)
-	if !ok || ev.Sender == c.mc.UserID {
+	if !ok || ev.Sender == c.mc.UserID || !c.synced.Load() {
 		return
 	}
 
@@ -257,7 +257,7 @@ func (c *Client) handleRedaction(_ context.Context, ev *event.Event) {
 
 func (c *Client) handleTyping(_ context.Context, ev *event.Event) {
 	h, ok := c.handler.(TypingHandler)
-	if !ok {
+	if !ok || !c.synced.Load() {
 		return
 	}
 
