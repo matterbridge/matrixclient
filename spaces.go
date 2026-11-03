@@ -214,8 +214,10 @@ func (c *Client) RemoveFromTeam(ctx context.Context, spaceID, roomID id.RoomID) 
 // reported as a bot until it sends anything else.
 func (c *Client) noteSender(userID id.UserID, msgType event.MessageType) {
 	c.RLock()
+
 	u, ok := c.users[userID]
 	known := ok && (u.human || (msgType == event.MsgNotice && u.Bot))
+
 	c.RUnlock()
 
 	if known {

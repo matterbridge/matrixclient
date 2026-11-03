@@ -65,22 +65,7 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 		opt(&o)
 	}
 
-	// Logger for the rest of matrixclient
-	rootLogger := logrus.New()
-	rootLogger.SetFormatter(&prefixed.TextFormatter{
-		PrefixPadding: 13,
-		DisableColors: false,
-		FullTimestamp: true,
-	})
-	// Logger for Matrix API calls
-	rootAPILogger := logrus.New()
-	rootAPILogger.SetFormatter(&prefixed.TextFormatter{
-		PrefixPadding: 18,
-		DisableColors: false,
-		FullTimestamp: true,
-	})
-	// Default to higher than "warn" to not log anything
-	rootAPILogger.SetLevel(logrus.ErrorLevel)
+	rootLogger, rootAPILogger := newLoggers()
 
 	mc, err := mautrix.NewClient(cred.Server, "", "")
 	if err != nil {
@@ -120,26 +105,9 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 	// sync response were processed, so handler calls stay serialized.
 	mc.Syncer = &readySyncer{DefaultSyncer: syncer, ready: h.Ready, synced: c.onSynced}
 
-	if o.crypto != nil {
-		// The crypto helper logs in itself to reuse the device stored with its keys.
-		c.crypto, err = o.crypto(mc, loginReq(cred, ""))
-		if err != nil {
-			return nil, err
-		}
-
-		mc.Crypto = c.crypto
-
-		err = c.crypto.Init(ctx)
-		if err != nil {
-			_ = c.crypto.Close()
-
-			return nil, err
-		}
-	} else {
-		_, err = mc.Login(ctx, loginReq(cred, ""))
-		if err != nil {
-			return nil, err
-		}
+	err = c.login(ctx, o.crypto)
+	if err != nil {
+		return nil, err
 	}
 
 	c.connected.Store(true)
@@ -148,6 +116,53 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 	go c.maintainPresence()
 
 	return c, nil
+}
+
+func newLoggers() (*logrus.Logger, *logrus.Logger) {
+	// Logger for the rest of matrixclient
+	rootLogger := logrus.New()
+	rootLogger.SetFormatter(&prefixed.TextFormatter{
+		PrefixPadding: 13,
+		DisableColors: false,
+		FullTimestamp: true,
+	})
+	// Logger for Matrix API calls
+	rootAPILogger := logrus.New()
+	rootAPILogger.SetFormatter(&prefixed.TextFormatter{
+		PrefixPadding: 18,
+		DisableColors: false,
+		FullTimestamp: true,
+	})
+	// Default to higher than "warn" to not log anything
+	rootAPILogger.SetLevel(logrus.ErrorLevel)
+
+	return rootLogger, rootAPILogger
+}
+
+func (c *Client) login(ctx context.Context, factory CryptoFactory) error {
+	if factory == nil {
+		_, err := c.mc.Login(ctx, loginReq(c.cred, ""))
+
+		return err
+	}
+
+	// The crypto helper logs in itself to reuse the device stored with its keys.
+	crypto, err := factory(c.mc, loginReq(c.cred, ""))
+	if err != nil {
+		return err
+	}
+
+	c.crypto = crypto
+	c.mc.Crypto = crypto
+
+	err = crypto.Init(ctx)
+	if err != nil {
+		_ = crypto.Close()
+
+		return err
+	}
+
+	return nil
 }
 
 func (c *Client) register(s *mautrix.DefaultSyncer) {

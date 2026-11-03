@@ -69,7 +69,7 @@ func (c *Client) relogin(ctx context.Context) error {
 }
 
 // HandleRetry decides whether a failed API call should be retried, sleeping
-// before returning true. Rate limits honour the server's retry_after_ms and
+// before returning true. Rate limits respect the server's retry_after_ms and
 // other 4xx errors are not retried. It returns an error only when ctx is done.
 func (c *Client) HandleRetry(ctx context.Context, name string, err error, current, maxLimit int) (bool, error) {
 	if ctx.Err() != nil {
@@ -126,6 +126,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	}
 
 	_, err := c.mc.Whoami(ctx)
+
 	return err
 }
 
