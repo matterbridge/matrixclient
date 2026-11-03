@@ -161,7 +161,7 @@ func (c *Client) handleCanonicalAlias(_ context.Context, ev *event.Event) {
 }
 
 func (c *Client) handleMessage(_ context.Context, ev *event.Event) {
-	if ev.Sender == c.mc.UserID || !c.synced.Load() {
+	if ev.Sender == c.mc.UserID {
 		return
 	}
 
@@ -172,6 +172,10 @@ func (c *Client) handleMessage(_ context.Context, ev *event.Event) {
 
 	if targetID := content.RelatesTo.GetReplaceID(); targetID != "" {
 		if h, ok := c.handler.(EditHandler); ok {
+			if !c.synced.Load() {
+				return
+			}
+
 			text := content.Body
 			if content.NewContent != nil {
 				text = content.NewContent.Body
@@ -192,6 +196,10 @@ func (c *Client) handleMessage(_ context.Context, ev *event.Event) {
 	}
 
 	c.noteSender(ev.Sender, content.MsgType)
+
+	if !c.synced.Load() {
+		return
+	}
 
 	msg := &Message{
 		RoomID:    ev.RoomID,
