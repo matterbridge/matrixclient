@@ -31,6 +31,14 @@ type Client struct {
 	cancel context.CancelFunc
 
 	connected atomic.Bool
+	synced    atomic.Bool // set once the initial sync was processed
+
+	cred Credentials
+
+	// stateLock guards the debounce maps and is never held across API calls.
+	stateLock  sync.Mutex
+	lastViewed map[id.RoomID]viewedMark
+	lastTyping map[id.RoomID]time.Time
 
 	logger        *logrus.Entry
 	rootLogger    *logrus.Logger
@@ -41,10 +49,22 @@ type Client struct {
 	dmChannels map[id.RoomID][]id.UserID
 	directData map[id.UserID][]id.RoomID // last known m.direct account data
 	users      map[id.UserID]*User
+	presence   map[id.UserID]*Presence
+	spaces     map[id.RoomID]*space
+
+	crypto Crypto
+
+	lastSync     atomic.Int64 // unix nanoseconds of the last processed sync response
+	forceRelogin atomic.Bool
 }
 
 // New logs in and starts syncing. Handler.Ready is called after the initial sync.
-func New(ctx context.Context, cred Credentials, h Handler) (*Client, error) {
+func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Client, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	// Logger for the rest of matrixclient
 	rootLogger := logrus.New()
 	rootLogger.SetFormatter(&prefixed.TextFormatter{
@@ -67,19 +87,10 @@ func New(ctx context.Context, cred Credentials, h Handler) (*Client, error) {
 		return nil, err
 	}
 
-	_, err = mc.Login(ctx, &mautrix.ReqLogin{
-		Type:             mautrix.AuthTypePassword,
-		Identifier:       mautrix.UserIdentifier{Type: mautrix.IdentifierTypeUser, User: cred.Login},
-		Password:         cred.Pass,
-		StoreCredentials: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	c := &Client{
 		mc:      mc,
 		handler: h,
+		cred:    cred,
 
 		rootLogger:    rootLogger,
 		logger:        rootLogger.WithFields(logrus.Fields{"prefix": "matrixclient"}),
@@ -90,6 +101,11 @@ func New(ctx context.Context, cred Credentials, h Handler) (*Client, error) {
 		dmChannels: make(map[id.RoomID][]id.UserID),
 		directData: make(map[id.UserID][]id.RoomID),
 		users:      make(map[id.UserID]*User),
+		presence:   make(map[id.UserID]*Presence),
+		spaces:     make(map[id.RoomID]*space),
+
+		lastViewed: make(map[id.RoomID]viewedMark),
+		lastTyping: make(map[id.RoomID]time.Time),
 	}
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
@@ -102,11 +118,34 @@ func New(ctx context.Context, cred Credentials, h Handler) (*Client, error) {
 
 	// Ready is called from the sync goroutine, after the events of the first
 	// sync response were processed, so handler calls stay serialized.
-	mc.Syncer = &readySyncer{DefaultSyncer: syncer, ready: h.Ready}
+	mc.Syncer = &readySyncer{DefaultSyncer: syncer, ready: h.Ready, synced: c.onSynced}
 
-	go c.syncLoop()
+	if o.crypto != nil {
+		// The crypto helper logs in itself to reuse the device stored with its keys.
+		c.crypto, err = o.crypto(mc, loginReq(cred, ""))
+		if err != nil {
+			return nil, err
+		}
+
+		mc.Crypto = c.crypto
+
+		err = c.crypto.Init(ctx)
+		if err != nil {
+			_ = c.crypto.Close()
+
+			return nil, err
+		}
+	} else {
+		_, err = mc.Login(ctx, loginReq(cred, ""))
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	c.connected.Store(true)
+
+	go c.syncLoop()
+	go c.maintainPresence()
 
 	return c, nil
 }
@@ -118,21 +157,51 @@ func (c *Client) register(s *mautrix.DefaultSyncer) {
 	s.OnEventType(event.StateRoomName, c.handleRoomName)
 	s.OnEventType(event.AccountDataDirectChats, c.handleDM)
 	s.OnEventType(event.StateCanonicalAlias, c.handleCanonicalAlias)
+	s.OnEventType(event.EventRedaction, c.handleRedaction)
+	s.OnEventType(event.EphemeralEventTyping, c.handleTyping)
+	s.OnEventType(event.StateTopic, c.handleTopic)
+	s.OnEventType(event.StateCreate, c.handleCreate)
+	s.OnEventType(event.StateEncryption, c.handleEncryption)
+	s.OnEventType(event.StateSpaceChild, c.handleSpaceChild)
+	s.OnEventType(event.EphemeralEventPresence, c.handlePresence)
 }
 
 func (c *Client) syncLoop() {
+	backoff := time.Second
+
 	for c.ctx.Err() == nil {
+		if c.forceRelogin.Swap(false) {
+			err := c.relogin(c.ctx)
+			if err != nil {
+				c.apiLogger.Errorf("reconnect: %s", err)
+			}
+		}
+
 		err := c.mc.SyncWithContext(c.ctx)
 		if err == nil || c.ctx.Err() != nil {
 			continue
 		}
 
+		// A sync that was healthy before failing starts over with a short backoff.
+		if c.connected.Swap(false) {
+			backoff = time.Second
+		}
+
 		c.apiLogger.Errorf("sync: %s", err)
+
+		if errors.Is(err, mautrix.MUnknownToken) {
+			err = c.relogin(c.ctx)
+			if err != nil {
+				c.apiLogger.Errorf("relogin: %s", err)
+			}
+		}
 
 		select {
 		case <-c.ctx.Done():
-		case <-time.After(5 * time.Second):
+		case <-time.After(backoff):
 		}
+
+		backoff = min(backoff*2, maxSyncBackoff)
 	}
 }
 
@@ -140,13 +209,15 @@ func (c *Client) syncLoop() {
 type readySyncer struct {
 	*mautrix.DefaultSyncer
 
-	once  sync.Once
-	ready func()
+	once   sync.Once
+	ready  func()
+	synced func()
 }
 
 func (r *readySyncer) ProcessResponse(ctx context.Context, res *mautrix.RespSync, since string) error {
 	err := r.DefaultSyncer.ProcessResponse(ctx, res, since)
 	if err == nil {
+		r.synced()
 		r.once.Do(r.ready)
 	}
 
@@ -157,6 +228,10 @@ func (r *readySyncer) ProcessResponse(ctx context.Context, res *mautrix.RespSync
 func (c *Client) Logout() {
 	c.connected.Store(false)
 	c.cancel()
+
+	if c.crypto != nil {
+		_ = c.crypto.Close()
+	}
 }
 
 // Connected reports whether the client is logged in.
