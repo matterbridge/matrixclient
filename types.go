@@ -17,6 +17,8 @@ type Credentials struct {
 	// The token cannot be renewed, so it is not refreshed once it expires.
 	Token string
 	// DeviceID is the device the token belongs to. Optional, looked up when empty.
+	// With e2ee, the key database is bound to this device: a different device
+	// fails to start instead of reusing or overwriting the stored keys.
 	DeviceID id.DeviceID
 }
 
