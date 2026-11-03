@@ -77,7 +77,9 @@ type Edit struct {
 	Timestamp int64
 }
 
-// Redaction is an incoming deletion of an event, which can be a message or a reaction.
+// Redaction is an incoming deletion of an event, which can be a message or a
+// reaction. Redactions from ourselves are delivered too, compare Sender with
+// Client.UserID.
 type Redaction struct {
 	RoomID   id.RoomID
 	TargetID id.EventID
@@ -108,7 +110,8 @@ type TopicChange struct {
 	Topic  string
 }
 
-// Reaction is an incoming reaction to an event.
+// Reaction is an incoming reaction to an event. Reactions from ourselves are
+// delivered too, compare Sender with Client.UserID.
 type Reaction struct {
 	RoomID   id.RoomID
 	ParentID id.EventID
@@ -118,7 +121,10 @@ type Reaction struct {
 }
 
 // Handler receives events from the client. All methods, including Ready, are
-// called from the sync goroutine and must not block for long.
+// called from the sync goroutine and must not block for long. The exception
+// are encrypted messages whose room key arrives late: they are delivered from
+// another goroutine once decrypted, possibly after Ready, so a handler must
+// be safe for concurrent use.
 type Handler interface {
 	// Ready is called once, after the events of the initial sync were processed.
 	// The messages, reactions, redactions and typing events of the initial sync
