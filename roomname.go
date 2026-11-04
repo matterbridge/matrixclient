@@ -391,17 +391,8 @@ func (c *Client) RefreshRoomName(ctx context.Context, roomID id.RoomID) error {
 	nameErr := c.mc.StateEvent(ctx, roomID, event.StateRoomName, "", &name)
 	aliasErr := c.mc.StateEvent(ctx, roomID, event.StateCanonicalAlias, "", &alias)
 
-	nameAbsent := errors.Is(nameErr, mautrix.MNotFound) || nameErr == nil && name.Name == ""
-	aliasAbsent := errors.Is(aliasErr, mautrix.MNotFound) || aliasErr == nil && alias.Alias == ""
-
-	var err error
-	if nameErr != nil && !errors.Is(nameErr, mautrix.MNotFound) {
-		err = nameErr
-	}
-
-	if aliasErr != nil && !errors.Is(aliasErr, mautrix.MNotFound) {
-		err = errors.Join(err, aliasErr)
-	}
+	nameAbsent := absentState(nameErr, name.Name == "")
+	aliasAbsent := absentState(aliasErr, alias.Alias == "")
 
 	ch.Lock()
 	defer ch.Unlock()
@@ -416,6 +407,21 @@ func (c *Client) RefreshRoomName(ctx context.Context, roomID id.RoomID) error {
 	}
 
 	ch.nameChecked = nameAbsent && aliasAbsent && ch.nameRev == nameRev && ch.aliasRev == aliasRev
+
+	return errors.Join(lookupError(nameErr), lookupError(aliasErr))
+}
+
+// absentState reports whether a state lookup confirmed the state is not set: a 404, or
+// successful empty content, which is what remains after the state was cleared.
+func absentState(err error, empty bool) bool {
+	return errors.Is(err, mautrix.MNotFound) || err == nil && empty
+}
+
+// lookupError returns err unless it is a 404, which means the state is not set.
+func lookupError(err error) error {
+	if errors.Is(err, mautrix.MNotFound) {
+		return nil
+	}
 
 	return err
 }
