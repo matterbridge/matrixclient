@@ -311,6 +311,7 @@ func (r *readySyncer) OnFailedSync(res *mautrix.RespSync, err error) (time.Durat
 	}
 
 	wait := min(time.Second<<min(r.failures, 5), maxSyncRetryWait)
+
 	jitter, randomErr := rand.Int(rand.Reader, big.NewInt(int64(wait/2)+1))
 	if randomErr == nil {
 		wait += time.Duration(jitter.Int64())
