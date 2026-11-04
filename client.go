@@ -109,7 +109,7 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 
 	// Ready is called from the sync goroutine, after the events of the first
 	// sync response were processed, so handler calls stay serialized.
-	mc.Syncer = &readySyncer{DefaultSyncer: syncer, ready: h.Ready, synced: c.onSynced, track: c.noteTimeline}
+	mc.Syncer = &readySyncer{DefaultSyncer: syncer, ready: h.Ready, synced: c.onSynced, track: c.noteTimeline, decrypted: c.noteDecrypted}
 
 	err = c.login(ctx, o.crypto)
 	if err != nil {
@@ -277,10 +277,11 @@ func (c *Client) syncLoop() {
 type readySyncer struct {
 	*mautrix.DefaultSyncer
 
-	once   sync.Once
-	ready  func()
-	synced func()
-	track  func(*mautrix.RespSync)
+	once      sync.Once
+	ready     func()
+	synced    func()
+	track     func(*mautrix.RespSync)
+	decrypted func(*event.Event)
 }
 
 func (r *readySyncer) ProcessResponse(ctx context.Context, res *mautrix.RespSync, since string) error {
@@ -293,6 +294,12 @@ func (r *readySyncer) ProcessResponse(ctx context.Context, res *mautrix.RespSync
 	}
 
 	return err
+}
+
+// Dispatch sees the events the crypto helper dispatches after decrypting them.
+func (r *readySyncer) Dispatch(ctx context.Context, ev *event.Event) {
+	r.decrypted(ev)
+	r.DefaultSyncer.Dispatch(ctx, ev)
 }
 
 // Logout stops syncing.

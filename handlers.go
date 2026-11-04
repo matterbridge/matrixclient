@@ -242,11 +242,10 @@ func pruneEventSeq(ch *Channel, expire bool) {
 	ch.pruneAt = 2 * len(ch.eventSeq)
 }
 
-// noteDecryptFailure drops the position of a message the Crypto gave up on, as
-// it is never delivered.
-func (c *Client) noteDecryptFailure(ev *event.Event, _ error) {
+// dropPending forgets the position of a message that will not advance LastEventID.
+func (c *Client) dropPending(roomID id.RoomID, eventID id.EventID) {
 	c.RLock()
-	ch, ok := c.channels[ev.RoomID]
+	ch, ok := c.channels[roomID]
 	c.RUnlock()
 
 	if !ok {
@@ -254,8 +253,22 @@ func (c *Client) noteDecryptFailure(ev *event.Event, _ error) {
 	}
 
 	ch.Lock()
-	delete(ch.eventSeq, ev.ID)
+	delete(ch.eventSeq, eventID)
 	ch.Unlock()
+}
+
+// noteDecryptFailure drops the position of a message the Crypto gave up on, as
+// it is never delivered.
+func (c *Client) noteDecryptFailure(ev *event.Event, _ error) {
+	c.dropPending(ev.RoomID, ev.ID)
+}
+
+// noteDecrypted drops the position of a decrypted event that is not a message,
+// as it never reaches noteActivity.
+func (c *Client) noteDecrypted(ev *event.Event) {
+	if ev.Mautrix.WasEncrypted && ev.Type != event.EventMessage {
+		c.dropPending(ev.RoomID, ev.ID)
+	}
 }
 
 // noteActivity records the newest message of a room, including
@@ -285,6 +298,8 @@ func (c *Client) noteActivity(roomID id.RoomID, eventID id.EventID, ts int64) {
 func (c *Client) handleMessage(_ context.Context, ev *event.Event) {
 	content := ev.Content.AsMessage()
 	if content == nil {
+		c.dropPending(ev.RoomID, ev.ID)
+
 		return
 	}
 
