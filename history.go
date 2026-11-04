@@ -21,8 +21,18 @@ type UserInfo struct {
 }
 
 // messageFromEvent converts a fetched event, returning nil for anything that
-// is not a plain message (edits are folded into their original by the server).
-func (c *Client) messageFromEvent(ev *event.Event) *Message {
+// is not a plain message, decrypting it first if needed (edits are folded into their original by the server).
+func (c *Client) messageFromEvent(ctx context.Context, ev *event.Event) *Message {
+	if ev != nil && ev.Type == event.EventEncrypted && c.crypto != nil {
+		// Undecryptable history, e.g. a missing room key, is skipped like any non-message.
+		dec, err := c.crypto.Decrypt(ctx, ev)
+		if err != nil {
+			return nil
+		}
+
+		ev = dec
+	}
+
 	if ev == nil || ev.Type != event.EventMessage {
 		return nil
 	}
@@ -57,11 +67,11 @@ func (c *Client) messageFromEvent(ev *event.Event) *Message {
 	return msg
 }
 
-func (c *Client) messagesFromEvents(events []*event.Event) []*Message {
+func (c *Client) messagesFromEvents(ctx context.Context, events []*event.Event) []*Message {
 	msgs := make([]*Message, 0, len(events))
 
 	for _, ev := range events {
-		msg := c.messageFromEvent(ev)
+		msg := c.messageFromEvent(ctx, ev)
 		if msg != nil {
 			msgs = append(msgs, msg)
 		}
@@ -81,7 +91,7 @@ func (c *Client) GetMessages(ctx context.Context, roomID id.RoomID, limit int) (
 			return nil, err
 		}
 
-		msgs = append(msgs, c.messagesFromEvents(page)...)
+		msgs = append(msgs, c.messagesFromEvents(ctx, page)...)
 
 		if next == "" || len(page) == 0 {
 			break
@@ -110,7 +120,7 @@ func (c *Client) GetMessagesSince(ctx context.Context, roomID id.RoomID, since i
 
 		done := next == "" || len(page) == 0
 
-		for _, msg := range c.messagesFromEvents(page) {
+		for _, msg := range c.messagesFromEvents(ctx, page) {
 			if msg.Timestamp < since {
 				done = true
 
@@ -134,7 +144,7 @@ func (c *Client) GetMessagesSince(ctx context.Context, roomID id.RoomID, since i
 
 // messagesPage returns a page of events, newest first, and the token of the next page.
 func (c *Client) messagesPage(ctx context.Context, roomID id.RoomID, from string, limit int) ([]*event.Event, string, error) {
-	filter := &mautrix.FilterPart{Types: []event.Type{event.EventMessage}}
+	filter := &mautrix.FilterPart{Types: []event.Type{event.EventMessage, event.EventEncrypted}}
 
 	resp, err := c.mc.Messages(ctx, roomID, from, "", mautrix.DirectionBackward, filter, limit)
 	if err != nil {
@@ -155,7 +165,7 @@ func (c *Client) GetThread(ctx context.Context, roomID id.RoomID, rootID id.Even
 		root.RoomID = roomID
 	}
 
-	msgs := c.messagesFromEvents([]*event.Event{root})
+	msgs := c.messagesFromEvents(ctx, []*event.Event{root})
 	token := ""
 
 	for range historyMaxPages {
@@ -175,7 +185,7 @@ func (c *Client) GetThread(ctx context.Context, roomID id.RoomID, rootID id.Even
 			}
 		}
 
-		msgs = append(msgs, c.messagesFromEvents(resp.Chunk)...)
+		msgs = append(msgs, c.messagesFromEvents(ctx, resp.Chunk)...)
 
 		if resp.NextBatch == "" {
 			break
@@ -203,7 +213,7 @@ func (c *Client) SearchMessages(ctx context.Context, query string) ([]*Message, 
 		events = append(events, r.Event)
 	}
 
-	return c.messagesFromEvents(events), nil
+	return c.messagesFromEvents(ctx, events), nil
 }
 
 // SearchUsers searches the homeserver user directory.
