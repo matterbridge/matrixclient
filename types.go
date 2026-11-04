@@ -174,10 +174,15 @@ type MemberHandler interface {
 }
 
 // RoomRename is a change of the channel name of a room, as listed by Client.Rooms.
+// Like matterircd's ChannelUpdateEvent for Mattermost it carries the room ID, the
+// new channel name and the display name. A consumer is expected to handle it the
+// same way: PART the channel of OldName with "Channel renamed to <Name>", JOIN
+// Name and send a server notice. Direct rooms are never reported.
 type RoomRename struct {
-	RoomID  id.RoomID
-	OldName string
-	Name    string
+	RoomID      id.RoomID
+	OldName     string
+	Name        string
+	DisplayName string // the room name as set, empty if it has none
 }
 
 // RoomNameHandler can optionally be implemented by a Handler to be told when the

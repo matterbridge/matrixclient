@@ -187,12 +187,13 @@ func (c *Client) noteRoomName(roomID id.RoomID) {
 	ch.Lock()
 	old := ch.reportedName
 
-	var name string
+	var name, display string
 
 	if old != "" && !ch.IsDirect {
 		name = c.displayNameLocked(roomID, ch)
 		if name != old {
 			ch.reportedName = name
+			display = ch.RawName
 		}
 	}
 
@@ -200,6 +201,6 @@ func (c *Client) noteRoomName(roomID id.RoomID) {
 	c.RUnlock()
 
 	if name != "" && name != old {
-		h.OnRoomName(&RoomRename{RoomID: roomID, OldName: old, Name: name})
+		h.OnRoomName(&RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: display})
 	}
 }
