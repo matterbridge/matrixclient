@@ -185,6 +185,14 @@ func (c *Client) noteTimeline(res *mautrix.RespSync) {
 	for roomID, room := range res.Rooms.Join {
 		if room != nil {
 			c.noteTimelineLocked(roomID, room.Timeline.Events)
+
+			if len(room.Summary.Heroes) > 0 {
+				ch := c.channelLocked(roomID)
+
+				ch.Lock()
+				ch.heroes = slices.Clone(room.Summary.Heroes)
+				ch.Unlock()
+			}
 		}
 	}
 

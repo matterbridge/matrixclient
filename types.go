@@ -52,6 +52,9 @@ type Channel struct {
 	nameFailures int       // consecutive failed name lookups
 	nameRetryAt  time.Time // earliest next background name lookup
 
+	heroes       []id.UserID // members the server suggests to name the room after, from the sync summary
+	reportedName string      // channel name last reported to the consumer, see RoomNameHandler
+
 	LastActivity int64      // timestamp in milliseconds of the newest message seen, 0 if none
 	LastEventID  id.EventID // newest message event seen, set during the initial sync as well
 
@@ -168,6 +171,21 @@ type RedactionHandler interface {
 // membership changes. Changes from the initial sync are not delivered.
 type MemberHandler interface {
 	OnMember(m *MemberChange)
+}
+
+// RoomRename is a change of the channel name of a room, as listed by Client.Rooms.
+type RoomRename struct {
+	RoomID  id.RoomID
+	OldName string
+	Name    string
+}
+
+// RoomNameHandler can optionally be implemented by a Handler to be told when the
+// channel name of a room changes, for example when a name that could not be
+// fetched earlier is resolved or an unnamed room gets one. Only rooms whose name
+// was reported through Client.Rooms or Client.ResolveRoomName are delivered.
+type RoomNameHandler interface {
+	OnRoomName(r *RoomRename)
 }
 
 // TopicHandler can optionally be implemented by a Handler to receive topic

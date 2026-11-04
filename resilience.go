@@ -280,7 +280,6 @@ func (c *Client) RefreshRoomName(ctx context.Context, roomID id.RoomID) error {
 	}
 
 	ch.Lock()
-	defer ch.Unlock()
 
 	// A sync event that arrived in the meantime is newer than the fetched state.
 	if ch.Name == "" && name.Name != "" {
@@ -300,7 +299,23 @@ func (c *Client) RefreshRoomName(ctx context.Context, roomID id.RoomID) error {
 		ch.nameFailures = 0
 	}
 
+	ch.Unlock()
+
+	c.noteRoomName(roomID)
+
 	return err
+}
+
+// noteRoomNames reports the channel name changes of the rooms in res, once all
+// its events were applied so a burst of state events yields a single change.
+func (c *Client) noteRoomNames(res *mautrix.RespSync) {
+	if _, ok := c.handler.(RoomNameHandler); !ok {
+		return
+	}
+
+	for roomID := range res.Rooms.Join {
+		c.noteRoomName(roomID)
+	}
 }
 
 func (c *Client) expirePresence(now time.Time) {
