@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"time"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
@@ -161,8 +162,14 @@ func (c *Client) handleCanonicalAlias(_ context.Context, ev *event.Event) {
 	ch.Unlock()
 }
 
-// pruneThreshold is the minimum Channel.eventSeq size that triggers a prune.
-const pruneThreshold = 1024
+const (
+	// pruneThreshold is the minimum Channel.eventSeq size that triggers a prune.
+	pruneThreshold = 1024
+	// pendingTTL is how long a position is kept for a message that is still
+	// undelivered, i.e. waits for a room key. A key arriving later still delivers
+	// the message, but it no longer advances LastEventID.
+	pendingTTL = time.Hour
+)
 
 // noteTimeline records the sync timeline position of the messages in res before
 // they are dispatched. Encrypted messages with a late room key are delivered
@@ -187,8 +194,11 @@ func (c *Client) noteTimeline(res *mautrix.RespSync) {
 func (c *Client) noteTimelineLocked(roomID id.RoomID, events []*event.Event) {
 	var ch *Channel
 
+	now := time.Now()
+
 	for _, ev := range events {
-		if ev.Type != event.EventMessage && ev.Type != event.EventEncrypted {
+		// Without crypto an encrypted event is never delivered, so it would stay pending.
+		if ev.Type != event.EventMessage && (ev.Type != event.EventEncrypted || c.crypto == nil) {
 			continue
 		}
 
@@ -197,12 +207,12 @@ func (c *Client) noteTimelineLocked(roomID id.RoomID, events []*event.Event) {
 			ch.Lock()
 
 			if ch.eventSeq == nil {
-				ch.eventSeq = make(map[id.EventID]uint64)
+				ch.eventSeq = make(map[id.EventID]pendingSeq)
 			}
 		}
 
 		ch.nextSeq++
-		ch.eventSeq[ev.ID] = ch.nextSeq
+		ch.eventSeq[ev.ID] = pendingSeq{seq: ch.nextSeq, at: now}
 	}
 
 	if ch == nil {
@@ -216,13 +226,14 @@ func (c *Client) noteTimelineLocked(roomID id.RoomID, events []*event.Event) {
 	ch.Unlock()
 }
 
-// pruneEventSeq drops the positions that cannot advance LastEventID. Pending
-// events newer than lastSeq are never evicted, as their late delivery must still
-// be able to advance it; they are bounded by the undelivered tail of the room.
-// The caller holds ch's lock.
+// pruneEventSeq drops the positions that cannot advance LastEventID, and those
+// that stayed unresolved for pendingTTL, which bounds the memory held by events
+// that never decrypt. The caller holds ch's lock.
 func pruneEventSeq(ch *Channel) {
-	for evID, seq := range ch.eventSeq {
-		if seq <= ch.lastSeq {
+	now := time.Now()
+
+	for evID, p := range ch.eventSeq {
+		if p.seq <= ch.lastSeq || now.Sub(p.at) > pendingTTL {
 			delete(ch.eventSeq, evID)
 		}
 	}
@@ -244,11 +255,11 @@ func (c *Client) noteActivity(roomID id.RoomID, eventID id.EventID, ts int64) {
 
 	// The timeline position, not the arrival or decryption order, decides the
 	// newest event, as origin_server_ts is not monotonic either.
-	if seq, ok := ch.eventSeq[eventID]; ok {
+	if p, ok := ch.eventSeq[eventID]; ok {
 		delete(ch.eventSeq, eventID)
 
-		if seq > ch.lastSeq {
-			ch.lastSeq, ch.LastEventID = seq, eventID
+		if p.seq > ch.lastSeq {
+			ch.lastSeq, ch.LastEventID = p.seq, eventID
 		}
 	}
 
