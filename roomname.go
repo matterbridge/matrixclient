@@ -227,15 +227,15 @@ func (c *Client) notifyRoomName(roomID id.RoomID, healed bool) {
 	defer c.nameNotify.Unlock()
 
 	for {
-		old, name, display, changed := c.claimRoomName(roomID)
+		rename, changed := c.claimRoomName(roomID)
 		if !changed {
 			return
 		}
 
 		if healed {
-			c.nameResolved(roomID, name)
+			c.nameResolved(roomID, rename.Name)
 		} else {
-			h.OnRoomName(&RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: display})
+			h.OnRoomName(rename)
 		}
 
 		if !c.finishRoomName(roomID) {
@@ -246,30 +246,30 @@ func (c *Client) notifyRoomName(roomID id.RoomID, healed bool) {
 
 // claimRoomName moves the reported name of a room to its current name and marks the
 // delivery of the callback as running, see reportNameLocked.
-func (c *Client) claimRoomName(roomID id.RoomID) (old, name, display string, changed bool) {
+func (c *Client) claimRoomName(roomID id.RoomID) (*RoomRename, bool) {
 	c.RLock()
 	defer c.RUnlock()
 
 	ch, ok := c.channels[roomID]
 	if !ok {
-		return "", "", "", false
+		return nil, false
 	}
 
 	ch.Lock()
 	defer ch.Unlock()
 
-	old = ch.reportedName
-	name = c.displayNameLocked(roomID, ch)
+	old := ch.reportedName
+	name := c.displayNameLocked(roomID, ch)
 
 	if name == old || old == "" || ch.IsDirect {
-		return "", "", "", false
+		return nil, false
 	}
 
 	ch.reportedName = name
 	ch.delivering = true
 	ch.renameAgain = false
 
-	return old, name, ch.RawName, true
+	return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true
 }
 
 // finishRoomName ends the delivery of a callback and reports whether the room
