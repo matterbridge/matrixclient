@@ -2,15 +2,27 @@ package matrixclient
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
+	"time"
 
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
 const (
 	maxFallbackNames = 3
 	shortIDLength    = 8
+
+	// Same retry policy as matterclient's channel name healing.
+	nameHealInitialDelay = 5 * time.Second
+	nameHealMaxDelay     = 5 * time.Minute
+	nameHealMaxAttempts  = 12
+
+	nameLookupTimeout = 30 * time.Second
+	maxNameLookups    = 5
 )
 
 // nameSanitizer drops what is not valid in an IRC channel name.
@@ -132,6 +144,13 @@ func shortRoomID(roomID id.RoomID) string {
 	return short[:min(len(short), shortIDLength)]
 }
 
+// nameUnresolvedLocked reports whether the room has neither a name nor an alias and
+// the server was not yet confirmed to have none, so its name may still be missing
+// because the state was lost. ch must be locked.
+func (ch *Channel) nameUnresolvedLocked() bool {
+	return ch.Name == "" && ch.Alias == "" && !ch.IsDirect && !ch.nameChecked
+}
+
 // ResolveRoomName returns the channel name of roomID, as Rooms lists it. A room
 // known only by its ID is first looked up on the server, bounded by ctx, so a
 // caller can pass a short deadline before creating the channel. It returns ""
@@ -146,13 +165,14 @@ func (c *Client) ResolveRoomName(ctx context.Context, roomID id.RoomID) string {
 	}
 
 	ch.RLock()
-	unnamed := ch.Name == "" && ch.Alias == "" && !ch.nameChecked
+	unresolved := ch.nameUnresolvedLocked()
 	ch.RUnlock()
 
-	if unnamed {
+	if unresolved {
 		err := c.RefreshRoomName(ctx, roomID)
 		if err != nil {
 			c.logger.Debugf("resolving name of %s: %s", roomID, err)
+			c.healRoomName(roomID)
 		}
 	}
 
@@ -203,4 +223,187 @@ func (c *Client) noteRoomName(roomID id.RoomID) {
 	if name != "" && name != old {
 		h.OnRoomName(&RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: display})
 	}
+}
+
+// noteRoomNames reports the channel name changes of the rooms in res, once all
+// its events were applied so a burst of state events yields a single change, and
+// heals the rooms that are still without a name.
+func (c *Client) noteRoomNames(res *mautrix.RespSync) {
+	_, notify := c.handler.(RoomNameHandler)
+
+	for roomID := range res.Rooms.Join {
+		if notify {
+			c.noteRoomName(roomID)
+		}
+
+		c.RLock()
+		ch, ok := c.channels[roomID]
+		c.RUnlock()
+
+		if !ok {
+			continue
+		}
+
+		ch.RLock()
+		unresolved := ch.nameUnresolvedLocked()
+		ch.RUnlock()
+
+		if unresolved {
+			c.healRoomName(roomID)
+		}
+	}
+}
+
+// healRoomName starts, at most once per room, a background retry with exponential
+// backoff that refetches the name and alias of a room that has neither, for
+// example because the state was lost during a failed sync. It stops on success,
+// when the room is gone, after nameHealMaxAttempts, or when the client stops.
+// OnRoomNameResolved is called once the name changed from the one reported.
+func (c *Client) healRoomName(roomID id.RoomID) {
+	if _, running := c.nameHealing.LoadOrStore(roomID, struct{}{}); running {
+		return
+	}
+
+	go func() {
+		defer c.nameHealing.Delete(roomID)
+
+		delay := nameHealInitialDelay
+
+		for attempt := 1; attempt <= nameHealMaxAttempts; attempt++ {
+			resolved, final := c.attemptRoomName(roomID)
+			if final {
+				return
+			}
+
+			if resolved {
+				c.logger.Infof("room name for %s resolved after %d attempt(s)", roomID, attempt)
+				c.reportResolvedName(roomID)
+
+				return
+			}
+
+			c.logger.Debugf("room name for %s still unresolved (attempt %d/%d), retrying in %s",
+				roomID, attempt, nameHealMaxAttempts, delay)
+
+			select {
+			case <-c.ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+
+			delay = min(delay*2, nameHealMaxDelay)
+		}
+
+		c.logger.Warnf("giving up resolving room name for %s", roomID)
+	}()
+}
+
+// attemptRoomName makes one lookup. It returns whether the name is now resolved,
+// and whether retrying is pointless (room gone, or the client stopped).
+func (c *Client) attemptRoomName(roomID id.RoomID) (bool, bool) {
+	select {
+	case <-c.ctx.Done():
+		return false, true
+	case c.nameLookups <- struct{}{}:
+	}
+
+	err := c.RefreshRoomName(c.ctx, roomID)
+
+	<-c.nameLookups
+
+	switch {
+	case err == nil:
+		return true, false
+	case c.ctx.Err() != nil, errors.Is(err, mautrix.MForbidden), errors.Is(err, mautrix.MUnknownToken):
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+// reportResolvedName calls OnRoomNameResolved if the room name differs from the one
+// last reported, so a room that was listed under a fallback name is told its new name.
+func (c *Client) reportResolvedName(roomID id.RoomID) {
+	cb := c.OnRoomNameResolved
+	if cb == nil {
+		return
+	}
+
+	c.RLock()
+	ch, ok := c.channels[roomID]
+
+	if !ok {
+		c.RUnlock()
+
+		return
+	}
+
+	ch.Lock()
+	old := ch.reportedName
+	name := c.displayNameLocked(roomID, ch)
+
+	if old != "" && name != old {
+		ch.reportedName = name
+	} else {
+		name = ""
+	}
+
+	ch.Unlock()
+	c.RUnlock()
+
+	if name != "" {
+		cb(roomID, name)
+	}
+}
+
+// RefreshRoomName fetches the name and canonical alias of roomID from the server
+// and applies the ones the room does not have yet. A room the server reports as
+// having neither is marked as such and not healed again, later changes arrive
+// through the sync. Unlike ResolveRoomName it does not report anything.
+func (c *Client) RefreshRoomName(ctx context.Context, roomID id.RoomID) error {
+	ctx, cancel := context.WithTimeout(ctx, nameLookupTimeout)
+	defer cancel()
+
+	var (
+		name  event.RoomNameEventContent
+		alias event.CanonicalAliasEventContent
+	)
+
+	nameErr := c.mc.StateEvent(ctx, roomID, event.StateRoomName, "", &name)
+	aliasErr := c.mc.StateEvent(ctx, roomID, event.StateCanonicalAlias, "", &alias)
+
+	missing := errors.Is(nameErr, mautrix.MNotFound) && errors.Is(aliasErr, mautrix.MNotFound)
+
+	var err error
+	if nameErr != nil && !errors.Is(nameErr, mautrix.MNotFound) {
+		err = nameErr
+	}
+
+	if aliasErr != nil && !errors.Is(aliasErr, mautrix.MNotFound) {
+		err = errors.Join(err, aliasErr)
+	}
+
+	c.RLock()
+	ch, ok := c.channels[roomID]
+	c.RUnlock()
+
+	if !ok {
+		return err
+	}
+
+	ch.Lock()
+	defer ch.Unlock()
+
+	// A sync event that arrived in the meantime is newer than the fetched state.
+	if ch.Name == "" && name.Name != "" {
+		ch.setNameLocked(name.Name)
+	}
+
+	if ch.Alias == "" && alias.Alias != "" {
+		ch.Alias, ch.AltAliases = alias.Alias, alias.AltAliases
+	}
+
+	ch.nameChecked = missing
+
+	return err
 }

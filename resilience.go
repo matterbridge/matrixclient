@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"maunium.net/go/mautrix"
-	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -16,11 +15,6 @@ const (
 	maxSyncRetryWait = 30 * time.Second
 	maxLoginRetries  = 10
 	defaultRateLimit = 3 * time.Second
-
-	// Bounds the room name lookups of one maintenance tick.
-	maxNameResolves    = 5
-	nameResolveTimeout = 30 * time.Second
-	maxNameRetryWait   = 30 * time.Minute
 
 	// Users not seen active for this long are reported offline, matching matterclient.
 	activeThreshold = 20 * time.Minute
@@ -184,137 +178,6 @@ func (c *Client) maintainPresence() {
 		case <-ticker.C:
 			c.expirePresence(time.Now())
 		}
-	}
-}
-
-// maintainRoomNames keeps trying to resolve rooms that are only known by their
-// ID. It runs apart from maintainPresence as the lookups can block for a while.
-func (c *Client) maintainRoomNames() {
-	ticker := time.NewTicker(maintainEvery)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-c.ctx.Done():
-			return
-		case <-ticker.C:
-			c.resolveRoomNames(time.Now())
-		}
-	}
-}
-
-// resolveRoomNames fetches the name and canonical alias of rooms that have
-// neither, for example when the state was lost during a slow or failed sync.
-// A failed room is retried with a growing delay, see nameRetryDelay.
-func (c *Client) resolveRoomNames(now time.Time) {
-	if !c.synced.Load() {
-		return
-	}
-
-	var roomIDs []id.RoomID
-
-	c.RLock()
-
-	for roomID, ch := range c.channels {
-		ch.RLock()
-
-		if ch.Name == "" && ch.Alias == "" && !ch.IsDirect && !ch.nameChecked && !now.Before(ch.nameRetryAt) && len(roomIDs) < maxNameResolves {
-			roomIDs = append(roomIDs, roomID)
-		}
-
-		ch.RUnlock()
-	}
-
-	c.RUnlock()
-
-	for _, roomID := range roomIDs {
-		if c.ctx.Err() != nil {
-			return
-		}
-
-		err := c.RefreshRoomName(c.ctx, roomID)
-		if err != nil {
-			c.logger.Warnf("fetching name of %s: %s", roomID, err)
-		}
-	}
-}
-
-// nameRetryDelay doubles with each consecutive failure, up to maxNameRetryWait.
-func nameRetryDelay(failures int) time.Duration {
-	return min(maintainEvery<<min(failures, 6), maxNameRetryWait)
-}
-
-// RefreshRoomName fetches the name and canonical alias of roomID from the server
-// and applies the ones the room does not have yet. A room the server reports as
-// having neither is not refreshed again by the background retry, later changes
-// arrive through the sync. On failure the background retry is delayed further.
-func (c *Client) RefreshRoomName(ctx context.Context, roomID id.RoomID) error {
-	ctx, cancel := context.WithTimeout(ctx, nameResolveTimeout)
-	defer cancel()
-
-	var (
-		name  event.RoomNameEventContent
-		alias event.CanonicalAliasEventContent
-	)
-
-	nameErr := c.mc.StateEvent(ctx, roomID, event.StateRoomName, "", &name)
-	aliasErr := c.mc.StateEvent(ctx, roomID, event.StateCanonicalAlias, "", &alias)
-
-	missing := errors.Is(nameErr, mautrix.MNotFound) && errors.Is(aliasErr, mautrix.MNotFound)
-
-	var err error
-	if nameErr != nil && !errors.Is(nameErr, mautrix.MNotFound) {
-		err = nameErr
-	}
-
-	if aliasErr != nil && !errors.Is(aliasErr, mautrix.MNotFound) {
-		err = errors.Join(err, aliasErr)
-	}
-
-	c.RLock()
-	ch, ok := c.channels[roomID]
-	c.RUnlock()
-
-	if !ok {
-		return err
-	}
-
-	ch.Lock()
-
-	// A sync event that arrived in the meantime is newer than the fetched state.
-	if ch.Name == "" && name.Name != "" {
-		ch.setNameLocked(name.Name)
-	}
-
-	if ch.Alias == "" && alias.Alias != "" {
-		ch.Alias, ch.AltAliases = alias.Alias, alias.AltAliases
-	}
-
-	ch.nameChecked = missing
-
-	if err != nil {
-		ch.nameFailures++
-		ch.nameRetryAt = time.Now().Add(nameRetryDelay(ch.nameFailures))
-	} else {
-		ch.nameFailures = 0
-	}
-
-	ch.Unlock()
-
-	c.noteRoomName(roomID)
-
-	return err
-}
-
-// noteRoomNames reports the channel name changes of the rooms in res, once all
-// its events were applied so a burst of state events yields a single change.
-func (c *Client) noteRoomNames(res *mautrix.RespSync) {
-	if _, ok := c.handler.(RoomNameHandler); !ok {
-		return
-	}
-
-	for roomID := range res.Rooms.Join {
-		c.noteRoomName(roomID)
 	}
 }
 

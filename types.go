@@ -48,9 +48,7 @@ type Channel struct {
 	Encrypted  bool
 	Topic      string
 
-	nameChecked  bool      // the server confirmed the room has no name or alias, see RefreshRoomName
-	nameFailures int       // consecutive failed name lookups
-	nameRetryAt  time.Time // earliest next background name lookup
+	nameChecked bool // the server confirmed the room has no name or alias, see RefreshRoomName
 
 	heroes       []id.UserID // members the server suggests to name the room after, from the sync summary
 	reportedName string      // channel name last reported to the consumer, see RoomNameHandler
@@ -186,9 +184,10 @@ type RoomRename struct {
 }
 
 // RoomNameHandler can optionally be implemented by a Handler to be told when the
-// channel name of a room changes, for example when a name that could not be
-// fetched earlier is resolved or an unnamed room gets one. Only rooms whose name
-// was reported through Client.Rooms or Client.ResolveRoomName are delivered.
+// channel name of a room changes through the sync, the counterpart of the channel
+// update event of Mattermost. Only rooms whose name was reported through
+// Client.Rooms or Client.ResolveRoomName are delivered. A name healed in the
+// background is reported through Client.OnRoomNameResolved instead.
 type RoomNameHandler interface {
 	OnRoomName(r *RoomRename)
 }

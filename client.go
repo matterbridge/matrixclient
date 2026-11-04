@@ -62,6 +62,13 @@ type Client struct {
 
 	lastSync     atomic.Int64 // unix nanoseconds of the last processed sync response
 	forceRelogin atomic.Bool
+
+	// OnRoomNameResolved, if set, is called after a room that was listed without a name
+	// or alias has been healed, see healRoomName. It must not block.
+	OnRoomNameResolved func(roomID id.RoomID, name string)
+	// nameHealing tracks the room IDs with a running healing goroutine.
+	nameHealing sync.Map
+	nameLookups chan struct{} // bounds the concurrent name lookups of all healing goroutines
 }
 
 // New logs in and starts syncing. Handler.Ready is called after the initial sync.
@@ -97,6 +104,8 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 		presence:   make(map[id.UserID]*Presence),
 		spaces:     make(map[id.RoomID]*space),
 
+		nameLookups: make(chan struct{}, maxNameLookups),
+
 		lastViewed: make(map[id.RoomID]viewedMark),
 		lastTyping: make(map[id.RoomID]time.Time),
 	}
@@ -128,7 +137,6 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 
 	go c.syncLoop()
 	go c.maintainPresence()
-	go c.maintainRoomNames()
 
 	return c, nil
 }
@@ -429,12 +437,13 @@ func (c *Client) Rooms() []RoomInfo {
 		display := c.displayNameLocked(roomID, ch)
 		ch.reportedName = display
 
-		unnamed, direct, members, last := ch.Name == "" && ch.Alias == "", ch.IsDirect, len(ch.Members), ch.LastActivity
+		unresolved, direct, members, last := ch.nameUnresolvedLocked(), ch.IsDirect, len(ch.Members), ch.LastActivity
 
 		ch.Unlock()
 
-		if unnamed {
+		if unresolved {
 			c.logger.Debugf("room %s has no name or alias, listing it as %s", roomID, display)
+			c.healRoomName(roomID)
 		}
 
 		if direct && members == 1 {
