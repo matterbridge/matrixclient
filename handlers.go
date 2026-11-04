@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
@@ -160,6 +161,57 @@ func (c *Client) handleCanonicalAlias(_ context.Context, ev *event.Event) {
 	ch.Unlock()
 }
 
+// maxTrackedEvents bounds Channel.eventSeq, which keeps events that never decrypt.
+const maxTrackedEvents = 1024
+
+// noteTimeline records the sync timeline position of the messages in res before
+// they are dispatched. Encrypted messages with a late room key are delivered
+// out of order, so their position can only be taken from the sync response.
+func (c *Client) noteTimeline(res *mautrix.RespSync) {
+	c.Lock()
+	defer c.Unlock()
+
+	for roomID, room := range res.Rooms.Join {
+		if room == nil {
+			continue
+		}
+
+		var ch *Channel
+
+		for _, ev := range room.Timeline.Events {
+			if ev.Type != event.EventMessage && ev.Type != event.EventEncrypted {
+				continue
+			}
+
+			if ch == nil {
+				ch = c.channelLocked(roomID)
+				ch.Lock()
+			}
+
+			if ch.eventSeq == nil {
+				ch.eventSeq = make(map[id.EventID]uint64)
+			}
+
+			ch.nextSeq++
+			ch.eventSeq[ev.ID] = ch.nextSeq
+		}
+
+		if ch == nil {
+			continue
+		}
+
+		if len(ch.eventSeq) > maxTrackedEvents {
+			for evID, seq := range ch.eventSeq {
+				if seq+maxTrackedEvents <= ch.nextSeq {
+					delete(ch.eventSeq, evID)
+				}
+			}
+		}
+
+		ch.Unlock()
+	}
+}
+
 // noteActivity records the newest message of a room, including
 // those of the initial sync which are not delivered to the handler.
 func (c *Client) noteActivity(roomID id.RoomID, eventID id.EventID, ts int64) {
@@ -170,8 +222,17 @@ func (c *Client) noteActivity(roomID id.RoomID, eventID id.EventID, ts int64) {
 
 	ch.Lock()
 	ch.LastActivity = max(ch.LastActivity, ts)
-	// Sync delivers events in timeline order, which may differ from origin_server_ts.
-	ch.LastEventID = eventID
+
+	// The timeline position, not the arrival or decryption order, decides the
+	// newest event, as origin_server_ts is not monotonic either.
+	if seq, ok := ch.eventSeq[eventID]; ok {
+		delete(ch.eventSeq, eventID)
+
+		if seq > ch.lastSeq {
+			ch.lastSeq, ch.LastEventID = seq, eventID
+		}
+	}
+
 	ch.Unlock()
 }
 

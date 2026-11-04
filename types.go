@@ -49,6 +49,9 @@ type Channel struct {
 
 	LastActivity int64      // timestamp in milliseconds of the newest message seen, 0 if none
 	LastEventID  id.EventID // newest message event seen, set during the initial sync as well
+
+	nextSeq, lastSeq uint64                // sync timeline positions, lastSeq belongs to LastEventID
+	eventSeq         map[id.EventID]uint64 // positions of messages not yet delivered to handleMessage
 }
 
 // Message is an incoming room or direct message. Messages sent by ourselves

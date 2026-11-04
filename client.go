@@ -107,7 +107,7 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 
 	// Ready is called from the sync goroutine, after the events of the first
 	// sync response were processed, so handler calls stay serialized.
-	mc.Syncer = &readySyncer{DefaultSyncer: syncer, ready: h.Ready, synced: c.onSynced}
+	mc.Syncer = &readySyncer{DefaultSyncer: syncer, ready: h.Ready, synced: c.onSynced, track: c.noteTimeline}
 
 	err = c.login(ctx, o.crypto)
 	if err != nil {
@@ -271,9 +271,12 @@ type readySyncer struct {
 	once   sync.Once
 	ready  func()
 	synced func()
+	track  func(*mautrix.RespSync)
 }
 
 func (r *readySyncer) ProcessResponse(ctx context.Context, res *mautrix.RespSync, since string) error {
+	r.track(res)
+
 	err := r.DefaultSyncer.ProcessResponse(ctx, res, since)
 	if err == nil {
 		r.synced()
