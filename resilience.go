@@ -20,6 +20,7 @@ const (
 	// Bounds the room name lookups of one maintenance tick.
 	maxNameResolves    = 5
 	nameResolveTimeout = 30 * time.Second
+	maxNameRetryWait   = 30 * time.Minute
 
 	// Users not seen active for this long are reported offline, matching matterclient.
 	activeThreshold = 20 * time.Minute
@@ -182,16 +183,30 @@ func (c *Client) maintainPresence() {
 			return
 		case <-ticker.C:
 			c.expirePresence(time.Now())
-			c.resolveRoomNames()
+		}
+	}
+}
+
+// maintainRoomNames keeps trying to resolve rooms that are only known by their
+// ID. It runs apart from maintainPresence as the lookups can block for a while.
+func (c *Client) maintainRoomNames() {
+	ticker := time.NewTicker(maintainEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			c.resolveRoomNames(time.Now())
 		}
 	}
 }
 
 // resolveRoomNames fetches the name and canonical alias of rooms that have
 // neither, for example when the state was lost during a slow or failed sync.
-// Failures are retried on the next tick. A room the server reports as having
-// neither is not asked again, later changes arrive through the sync.
-func (c *Client) resolveRoomNames() {
+// A failed room is retried with a growing delay, see nameRetryDelay.
+func (c *Client) resolveRoomNames(now time.Time) {
 	if !c.synced.Load() {
 		return
 	}
@@ -203,7 +218,7 @@ func (c *Client) resolveRoomNames() {
 	for roomID, ch := range c.channels {
 		ch.RLock()
 
-		if ch.Name == "" && ch.Alias == "" && !ch.IsDirect && !ch.nameChecked && len(roomIDs) < maxNameResolves {
+		if ch.Name == "" && ch.Alias == "" && !ch.IsDirect && !ch.nameChecked && !now.Before(ch.nameRetryAt) && len(roomIDs) < maxNameResolves {
 			roomIDs = append(roomIDs, roomID)
 		}
 
@@ -217,12 +232,24 @@ func (c *Client) resolveRoomNames() {
 			return
 		}
 
-		c.resolveRoomName(roomID)
+		err := c.RefreshRoomName(c.ctx, roomID)
+		if err != nil {
+			c.logger.Warnf("fetching name of %s: %s", roomID, err)
+		}
 	}
 }
 
-func (c *Client) resolveRoomName(roomID id.RoomID) {
-	ctx, cancel := context.WithTimeout(c.ctx, nameResolveTimeout)
+// nameRetryDelay doubles with each consecutive failure, up to maxNameRetryWait.
+func nameRetryDelay(failures int) time.Duration {
+	return min(maintainEvery<<min(failures, 6), maxNameRetryWait)
+}
+
+// RefreshRoomName fetches the name and canonical alias of roomID from the server
+// and applies the ones the room does not have yet. A room the server reports as
+// having neither is not refreshed again by the background retry, later changes
+// arrive through the sync. On failure the background retry is delayed further.
+func (c *Client) RefreshRoomName(ctx context.Context, roomID id.RoomID) error {
+	ctx, cancel := context.WithTimeout(ctx, nameResolveTimeout)
 	defer cancel()
 
 	var (
@@ -234,8 +261,14 @@ func (c *Client) resolveRoomName(roomID id.RoomID) {
 	aliasErr := c.mc.StateEvent(ctx, roomID, event.StateCanonicalAlias, "", &alias)
 
 	missing := errors.Is(nameErr, mautrix.MNotFound) && errors.Is(aliasErr, mautrix.MNotFound)
-	if (nameErr != nil && !errors.Is(nameErr, mautrix.MNotFound)) || (aliasErr != nil && !errors.Is(aliasErr, mautrix.MNotFound)) {
-		c.logger.Warnf("fetching name of %s: %s", roomID, errors.Join(nameErr, aliasErr))
+
+	var err error
+	if nameErr != nil && !errors.Is(nameErr, mautrix.MNotFound) {
+		err = nameErr
+	}
+
+	if aliasErr != nil && !errors.Is(aliasErr, mautrix.MNotFound) {
+		err = errors.Join(err, aliasErr)
 	}
 
 	c.RLock()
@@ -243,7 +276,7 @@ func (c *Client) resolveRoomName(roomID id.RoomID) {
 	c.RUnlock()
 
 	if !ok {
-		return
+		return err
 	}
 
 	ch.Lock()
@@ -259,6 +292,15 @@ func (c *Client) resolveRoomName(roomID id.RoomID) {
 	}
 
 	ch.nameChecked = missing
+
+	if err != nil {
+		ch.nameFailures++
+		ch.nameRetryAt = time.Now().Add(nameRetryDelay(ch.nameFailures))
+	} else {
+		ch.nameFailures = 0
+	}
+
+	return err
 }
 
 func (c *Client) expirePresence(now time.Time) {

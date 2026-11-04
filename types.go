@@ -48,7 +48,9 @@ type Channel struct {
 	Encrypted  bool
 	Topic      string
 
-	nameChecked bool // the server confirmed the room has no name or alias, see resolveRoomNames
+	nameChecked  bool      // the server confirmed the room has no name or alias, see RefreshRoomName
+	nameFailures int       // consecutive failed name lookups
+	nameRetryAt  time.Time // earliest next background name lookup
 
 	LastActivity int64      // timestamp in milliseconds of the newest message seen, 0 if none
 	LastEventID  id.EventID // newest message event seen, set during the initial sync as well

@@ -128,6 +128,7 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 
 	go c.syncLoop()
 	go c.maintainPresence()
+	go c.maintainRoomNames()
 
 	return c, nil
 }
@@ -437,6 +438,8 @@ func (c *Client) Rooms() []RoomInfo {
 		case name != "":
 			display = strings.Replace(name, ":", "/", 1)
 		default:
+			c.logger.Debugf("room %s has no name or alias, listing it by its ID", roomID)
+
 			display = strings.Replace(string(roomID), ":", "/", 1)
 		}
 
