@@ -298,8 +298,9 @@ func (c *Client) healRoomName(roomID id.RoomID) {
 	}()
 }
 
-// attemptRoomName makes one lookup. It returns whether the name is now resolved,
-// and whether retrying is pointless (room gone, or the client stopped).
+// attemptRoomName makes one lookup. It returns whether the room now has a name or
+// alias, and whether retrying is pointless: the room is gone, the server confirmed
+// it has neither (like a 404 on a Mattermost channel), or the client stopped.
 func (c *Client) attemptRoomName(roomID id.RoomID) (bool, bool) {
 	select {
 	case <-c.ctx.Done():
@@ -311,18 +312,26 @@ func (c *Client) attemptRoomName(roomID id.RoomID) (bool, bool) {
 
 	<-c.nameLookups
 
-	switch {
-	case err == nil:
-		return true, false
-	case c.ctx.Err() != nil, errors.Is(err, mautrix.MForbidden), errors.Is(err, mautrix.MUnknownToken):
+	if c.ctx.Err() != nil || errors.Is(err, mautrix.MForbidden) || errors.Is(err, mautrix.MUnknownToken) {
 		return false, true
-	default:
-		return false, false
 	}
+
+	c.RLock()
+	ch, ok := c.channels[roomID]
+	c.RUnlock()
+
+	if !ok {
+		return false, true
+	}
+
+	ch.RLock()
+	defer ch.RUnlock()
+
+	return ch.Name != "" || ch.Alias != "", ch.nameChecked
 }
 
-// reportResolvedName calls OnRoomNameResolved if the room name differs from the one
-// last reported, so a room that was listed under a fallback name is told its new name.
+// reportResolvedName calls OnRoomNameResolved with the healed name, unless a rename
+// from the sync already reported it.
 func (c *Client) reportResolvedName(roomID id.RoomID) {
 	cb := c.OnRoomNameResolved
 	if cb == nil {
@@ -342,16 +351,15 @@ func (c *Client) reportResolvedName(roomID id.RoomID) {
 	old := ch.reportedName
 	name := c.displayNameLocked(roomID, ch)
 
-	if old != "" && name != old {
+	changed := name != old
+	if changed {
 		ch.reportedName = name
-	} else {
-		name = ""
 	}
 
 	ch.Unlock()
 	c.RUnlock()
 
-	if name != "" {
+	if changed {
 		cb(roomID, name)
 	}
 }
