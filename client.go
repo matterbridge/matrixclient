@@ -4,9 +4,10 @@ package matrixclient
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"maps"
-	"math/rand/v2"
+	"math/big"
 	"slices"
 	"strings"
 	"sync"
@@ -310,7 +311,10 @@ func (r *readySyncer) OnFailedSync(res *mautrix.RespSync, err error) (time.Durat
 	}
 
 	wait := min(time.Second<<min(r.failures, 5), maxSyncRetryWait)
-	wait += time.Duration(rand.Int64N(int64(wait/2) + 1))
+	jitter, randomErr := rand.Int(rand.Reader, big.NewInt(int64(wait/2)+1))
+	if randomErr == nil {
+		wait += time.Duration(jitter.Int64())
+	}
 	r.failures++
 
 	r.failed(err, wait)
