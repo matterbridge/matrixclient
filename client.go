@@ -54,6 +54,8 @@ type Client struct {
 
 	crypto Crypto
 
+	defaultProvider string
+
 	lastSync     atomic.Int64 // unix nanoseconds of the last processed sync response
 	forceRelogin atomic.Bool
 }
@@ -76,6 +78,8 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 		mc:      mc,
 		handler: h,
 		cred:    cred,
+
+		defaultProvider: o.defaultProvider,
 
 		rootLogger:    rootLogger,
 		logger:        rootLogger.WithFields(logrus.Fields{"prefix": "matrixclient"}),
@@ -365,7 +369,7 @@ func (c *Client) Rooms() []RoomInfo {
 
 		rooms = append(rooms, RoomInfo{
 			ID:       roomID,
-			Name:     strings.Replace(string(alias), ":", "/", 1),
+			Name:     c.roomName(alias),
 			IsDirect: direct,
 
 			LastActivity: last,
@@ -373,6 +377,17 @@ func (c *Client) Rooms() []RoomInfo {
 	}
 
 	return rooms
+}
+
+// roomName converts an alias to a channel name, dropping the default provider.
+func (c *Client) roomName(alias id.RoomAlias) string {
+	if c.defaultProvider != "" {
+		if name, ok := strings.CutSuffix(string(alias), ":"+c.defaultProvider); ok {
+			return name
+		}
+	}
+
+	return strings.Replace(string(alias), ":", "/", 1)
 }
 
 // DisplayName returns the known display name of a user, or "".
@@ -417,6 +432,10 @@ func (c *Client) JoinedMembers(ctx context.Context, roomID id.RoomID) ([]id.User
 
 // Join joins a room by ID or alias.
 func (c *Client) Join(ctx context.Context, roomIDOrAlias string) (id.RoomID, error) {
+	if c.defaultProvider != "" && strings.HasPrefix(roomIDOrAlias, "#") && !strings.Contains(roomIDOrAlias, ":") {
+		roomIDOrAlias += ":" + c.defaultProvider
+	}
+
 	resp, err := c.mc.JoinRoom(ctx, roomIDOrAlias, nil)
 	if err != nil {
 		return "", err
