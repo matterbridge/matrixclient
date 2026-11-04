@@ -107,6 +107,19 @@ func (c *Client) applyMember(ev *event.Event, member *event.MemberEventContent, 
 		c.users[targetID] = u
 	}
 
+	// The profile is shared by the rooms of the user, so they all may be named differently now.
+	if c.synced.Load() && (u.MemberEventContent == nil || u.Displayname != member.Displayname) {
+		for roomID, other := range c.channels {
+			other.RLock()
+			_, in := other.Members[targetID]
+			other.RUnlock()
+
+			if in {
+				c.nameDirty[roomID] = struct{}{}
+			}
+		}
+	}
+
 	u.MemberEventContent = member
 
 	ch := c.channelLocked(ev.RoomID)
@@ -139,6 +152,7 @@ func (c *Client) handleRoomName(_ context.Context, ev *event.Event) {
 	ch.Lock()
 	defer ch.Unlock()
 
+	ch.nameRev++
 	ch.setNameLocked(name.Name)
 }
 
@@ -163,6 +177,7 @@ func (c *Client) handleCanonicalAlias(_ context.Context, ev *event.Event) {
 	ch := c.channelLocked(ev.RoomID)
 
 	ch.Lock()
+	ch.aliasRev++
 	ch.Alias, ch.AltAliases = alias.Alias, alias.AltAliases
 	ch.Unlock()
 }
@@ -186,7 +201,8 @@ func (c *Client) noteTimeline(res *mautrix.RespSync) {
 		if room != nil {
 			c.noteTimelineLocked(roomID, room.Timeline.Events)
 
-			if len(room.Summary.Heroes) > 0 {
+			// An omitted field keeps the heroes, an empty array clears them.
+			if room.Summary.Heroes != nil {
 				ch := c.channelLocked(roomID)
 
 				ch.Lock()

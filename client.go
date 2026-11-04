@@ -63,12 +63,14 @@ type Client struct {
 	lastSync     atomic.Int64 // unix nanoseconds of the last processed sync response
 	forceRelogin atomic.Bool
 
-	// OnRoomNameResolved, if set, is called after a room that was listed without a name
-	// or alias has been healed, see healRoomName. It must not block.
-	OnRoomNameResolved func(roomID id.RoomID, name string)
+	nameResolved func(roomID id.RoomID, name string) // see WithRoomNameResolved
 	// nameHealing tracks the room IDs with a running healing goroutine.
 	nameHealing sync.Map
 	nameLookups chan struct{} // bounds the concurrent name lookups of all healing goroutines
+	// nameNotify serializes the room name callbacks with the name state they report,
+	// so a late callback cannot overtake a newer one. It is taken before the client lock.
+	nameNotify sync.Mutex
+	nameDirty  map[id.RoomID]struct{} // rooms whose fallback name a shared profile change may have changed
 }
 
 // New logs in and starts syncing. Handler.Ready is called after the initial sync.
@@ -104,7 +106,9 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 		presence:   make(map[id.UserID]*Presence),
 		spaces:     make(map[id.RoomID]*space),
 
-		nameLookups: make(chan struct{}, maxNameLookups),
+		nameResolved: o.nameResolved,
+		nameLookups:  make(chan struct{}, maxNameLookups),
+		nameDirty:    make(map[id.RoomID]struct{}),
 
 		lastViewed: make(map[id.RoomID]viewedMark),
 		lastTyping: make(map[id.RoomID]time.Time),

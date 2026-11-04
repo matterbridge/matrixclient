@@ -49,6 +49,9 @@ type Channel struct {
 	Topic      string
 
 	nameChecked bool // the server confirmed the room has no name or alias, see RefreshRoomName
+	// nameRev and aliasRev count the sync events for the name and alias, clears included,
+	// so a lookup does not restore a value a newer sync event removed.
+	nameRev, aliasRev uint64
 
 	heroes       []id.UserID // members the server suggests to name the room after, from the sync summary
 	reportedName string      // channel name last reported to the consumer, see RoomNameHandler
@@ -187,7 +190,7 @@ type RoomRename struct {
 // channel name of a room changes through the sync, the counterpart of the channel
 // update event of Mattermost. Only rooms whose name was reported through
 // Client.Rooms or Client.ResolveRoomName are delivered. A name healed in the
-// background is reported through Client.OnRoomNameResolved instead.
+// background is reported through the WithRoomNameResolved callback instead.
 type RoomNameHandler interface {
 	OnRoomName(r *RoomRename)
 }
