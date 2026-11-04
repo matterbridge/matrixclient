@@ -37,9 +37,12 @@ func (c *Client) messageFromEvent(ctx context.Context, ev *event.Event) *Message
 		return nil
 	}
 
-	err := ev.Content.ParseRaw(ev.Type)
-	if err != nil {
-		return nil
+	// The crypto helper returns decrypted events already parsed.
+	if ev.Content.Parsed == nil {
+		err := ev.Content.ParseRaw(ev.Type)
+		if err != nil {
+			return nil
+		}
 	}
 
 	content := ev.Content.AsMessage()
@@ -144,7 +147,12 @@ func (c *Client) GetMessagesSince(ctx context.Context, roomID id.RoomID, since i
 
 // messagesPage returns a page of events, newest first, and the token of the next page.
 func (c *Client) messagesPage(ctx context.Context, roomID id.RoomID, from string, limit int) ([]*event.Event, string, error) {
-	filter := &mautrix.FilterPart{Types: []event.Type{event.EventMessage, event.EventEncrypted}}
+	types := []event.Type{event.EventMessage}
+	if c.crypto != nil {
+		types = append(types, event.EventEncrypted)
+	}
+
+	filter := &mautrix.FilterPart{Types: types}
 
 	resp, err := c.mc.Messages(ctx, roomID, from, "", mautrix.DirectionBackward, filter, limit)
 	if err != nil {
