@@ -88,12 +88,19 @@ func (c *Client) GetMessages(ctx context.Context, roomID id.RoomID, limit int) (
 	msgs := make([]*Message, 0, limit)
 	token := ""
 
-	for len(msgs) < limit {
-		page, next, err := c.messagesPage(ctx, roomID, token, min(limit-len(msgs), historyPageSize))
+	// Undecryptable events add no messages, so the page count is bounded as in GetMessagesSince.
+	for range historyMaxPages {
+		if len(msgs) >= limit {
+			break
+		}
+
+		page, next, err := c.messagesPage(ctx, roomID, token, historyPageSize)
 		if err != nil {
 			return nil, err
 		}
 
+		// Pages are newest first, so the surplus of the last page is the oldest.
+		msgs = append(msgs, c.messagesFromEvents(ctx, page)[:0:0]...)
 		msgs = append(msgs, c.messagesFromEvents(ctx, page)...)
 
 		if next == "" || len(page) == 0 {
