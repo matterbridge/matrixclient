@@ -211,7 +211,7 @@ func (c *Client) ResolveRoomName(ctx context.Context, roomID id.RoomID) string {
 		err := c.RefreshRoomName(ctx, roomID)
 		if err != nil {
 			c.logger.Debugf("resolving name of %s: %s", roomID, err)
-			c.healRoomName(roomID)
+			c.healRoomName(roomID, ch)
 		}
 	}
 
@@ -347,7 +347,7 @@ func (c *Client) noteRoomNames(res *mautrix.RespSync) {
 		ch.RUnlock()
 
 		if unresolved {
-			c.healRoomName(roomID)
+			c.healRoomName(roomID, ch)
 		}
 	}
 }
@@ -357,12 +357,15 @@ func (c *Client) noteRoomNames(res *mautrix.RespSync) {
 // example because the state was lost during a failed sync. It stops on success,
 // when the room is gone, after nameHealMaxAttempts, or when the client stops.
 // The WithRoomNameResolved callback is called once the name changed from the one reported.
-func (c *Client) healRoomName(roomID id.RoomID) {
+func (c *Client) healRoomName(roomID id.RoomID, ch *Channel) {
 	if _, running := c.nameHealing.LoadOrStore(roomID, struct{}{}); running {
 		return
 	}
 
-	epoch := c.nameEpoch(roomID)
+	// Taking only the room lock: callers may hold the client lock, and a nested read lock can deadlock.
+	ch.RLock()
+	epoch := ch.nameEpoch
+	ch.RUnlock()
 
 	go func() {
 		defer c.nameHealing.Delete(roomID)
@@ -418,22 +421,6 @@ func (c *Client) giveUpRoomName(roomID id.RoomID, epoch uint64) {
 	if ch.nameEpoch == epoch {
 		ch.nameGaveUp = true
 	}
-}
-
-// nameEpoch returns the current epoch of a room, see Channel.nameEpoch.
-func (c *Client) nameEpoch(roomID id.RoomID) uint64 {
-	c.RLock()
-	ch, ok := c.channels[roomID]
-	c.RUnlock()
-
-	if !ok {
-		return 0
-	}
-
-	ch.RLock()
-	defer ch.RUnlock()
-
-	return ch.nameEpoch
 }
 
 // attemptRoomName makes one lookup. It returns whether the room now has a name or

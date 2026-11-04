@@ -447,7 +447,7 @@ func (c *Client) Rooms() []RoomInfo {
 
 		if unresolved {
 			c.logger.Debugf("room %s has no name or alias, listing it as %s", roomID, display)
-			c.healRoomName(roomID)
+			c.healRoomName(roomID, ch)
 		}
 
 		if direct && members == 1 {
