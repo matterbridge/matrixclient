@@ -165,9 +165,8 @@ func (c *Client) handleCanonicalAlias(_ context.Context, ev *event.Event) {
 const (
 	// pruneThreshold is the minimum Channel.eventSeq size that triggers a prune.
 	pruneThreshold = 1024
-	// pendingTTL is how long a position is kept for a message that is still
-	// undelivered, i.e. waits for a room key. A key arriving later still delivers
-	// the message, but it no longer advances LastEventID.
+	// pendingTTL is how long a position is kept for an undelivered message when
+	// the Crypto cannot report terminal decryption failures, see DecryptFailureNotifier.
 	pendingTTL = time.Hour
 )
 
@@ -220,26 +219,43 @@ func (c *Client) noteTimelineLocked(roomID id.RoomID, events []*event.Event) {
 	}
 
 	if len(ch.eventSeq) > max(ch.pruneAt, pruneThreshold) {
-		pruneEventSeq(ch)
+		pruneEventSeq(ch, !c.decryptFailures)
 	}
 
 	ch.Unlock()
 }
 
-// pruneEventSeq drops the positions that cannot advance LastEventID, and those
-// that stayed unresolved for pendingTTL, which bounds the memory held by events
-// that never decrypt. The caller holds ch's lock.
-func pruneEventSeq(ch *Channel) {
+// pruneEventSeq drops the positions that cannot advance LastEventID. Pending
+// positions are kept until delivery or a terminal decryption failure, only
+// without failure reports they expire after pendingTTL to bound memory.
+// The caller holds ch's lock.
+func pruneEventSeq(ch *Channel, expire bool) {
 	now := time.Now()
 
 	for evID, p := range ch.eventSeq {
-		if p.seq <= ch.lastSeq || now.Sub(p.at) > pendingTTL {
+		if p.seq <= ch.lastSeq || (expire && now.Sub(p.at) > pendingTTL) {
 			delete(ch.eventSeq, evID)
 		}
 	}
 
 	// Avoid rescanning on every sync while a large tail stays pending.
 	ch.pruneAt = 2 * len(ch.eventSeq)
+}
+
+// noteDecryptFailure drops the position of a message the Crypto gave up on, as
+// it is never delivered.
+func (c *Client) noteDecryptFailure(ev *event.Event, _ error) {
+	c.RLock()
+	ch, ok := c.channels[ev.RoomID]
+	c.RUnlock()
+
+	if !ok {
+		return
+	}
+
+	ch.Lock()
+	delete(ch.eventSeq, ev.ID)
+	ch.Unlock()
 }
 
 // noteActivity records the newest message of a room, including

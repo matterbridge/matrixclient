@@ -54,6 +54,8 @@ type Client struct {
 
 	crypto Crypto
 
+	decryptFailures bool // crypto reports terminal decryption failures
+
 	defaultProvider string
 
 	lastSync     atomic.Int64 // unix nanoseconds of the last processed sync response
@@ -197,6 +199,13 @@ func (c *Client) login(ctx context.Context, factory CryptoFactory) error {
 	}
 
 	c.crypto = crypto
+
+	if n, ok := crypto.(DecryptFailureNotifier); ok {
+		n.OnDecryptFailure(c.noteDecryptFailure)
+
+		c.decryptFailures = true
+	}
+
 	c.mc.Crypto = crypto
 
 	err = crypto.Init(ctx)
