@@ -99,9 +99,9 @@ func (c *Client) GetMessages(ctx context.Context, roomID id.RoomID, limit int) (
 			return nil, err
 		}
 
-		// Pages are newest first, so the surplus of the last page is the oldest.
-		msgs = append(msgs, c.messagesFromEvents(ctx, page)[:0:0]...)
 		msgs = append(msgs, c.messagesFromEvents(ctx, page)...)
+		// Pages are newest first, so the surplus is the oldest.
+		msgs = msgs[:min(len(msgs), limit)]
 
 		if next == "" || len(page) == 0 {
 			break
