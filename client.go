@@ -354,13 +354,17 @@ func (c *Client) Rooms() []RoomInfo {
 
 		ch.RUnlock()
 
-		// A canonical alias is preferred over the room name.
-		if alias == "" {
-			alias = id.RoomAlias(name)
-		}
+		// A canonical alias is preferred over the room name. Only it has the
+		// default provider stripped.
+		var display string
 
-		if alias == "" {
-			alias = id.RoomAlias(roomID)
+		switch {
+		case alias != "":
+			display = c.roomName(alias)
+		case name != "":
+			display = strings.Replace(name, ":", "/", 1)
+		default:
+			display = strings.Replace(string(roomID), ":", "/", 1)
 		}
 
 		if direct && members == 1 {
@@ -369,7 +373,7 @@ func (c *Client) Rooms() []RoomInfo {
 
 		rooms = append(rooms, RoomInfo{
 			ID:       roomID,
-			Name:     c.roomName(alias),
+			Name:     display,
 			IsDirect: direct,
 
 			LastActivity: last,
