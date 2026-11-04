@@ -102,7 +102,11 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 	}
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
-	mc.Client.Transport = newAPILogTransport(mc.Client.Transport, c.apiLogger)
+	if o.userAgent != "" {
+		mc.UserAgent = o.userAgent
+	}
+
+	mc.Client.Transport = newAPILogTransport(newTransport(&o), c.apiLogger)
 
 	syncer, ok := mc.Syncer.(*mautrix.DefaultSyncer)
 	if !ok {
