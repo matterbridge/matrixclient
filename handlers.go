@@ -172,43 +172,77 @@ func (c *Client) noteTimeline(res *mautrix.RespSync) {
 	defer c.Unlock()
 
 	for roomID, room := range res.Rooms.Join {
-		if room == nil {
+		if room != nil {
+			c.noteTimelineLocked(roomID, room.Timeline.Events)
+		}
+	}
+
+	for roomID, room := range res.Rooms.Leave {
+		if room != nil {
+			c.noteTimelineLocked(roomID, room.Timeline.Events)
+		}
+	}
+}
+
+func (c *Client) noteTimelineLocked(roomID id.RoomID, events []*event.Event) {
+	var ch *Channel
+
+	for _, ev := range events {
+		if ev.Type != event.EventMessage && ev.Type != event.EventEncrypted {
 			continue
 		}
 
-		var ch *Channel
-
-		for _, ev := range room.Timeline.Events {
-			if ev.Type != event.EventMessage && ev.Type != event.EventEncrypted {
-				continue
-			}
-
-			if ch == nil {
-				ch = c.channelLocked(roomID)
-				ch.Lock()
-			}
+		if ch == nil {
+			ch = c.channelLocked(roomID)
+			ch.Lock()
 
 			if ch.eventSeq == nil {
 				ch.eventSeq = make(map[id.EventID]uint64)
 			}
-
-			ch.nextSeq++
-			ch.eventSeq[ev.ID] = ch.nextSeq
 		}
 
-		if ch == nil {
-			continue
-		}
+		ch.nextSeq++
+		ch.eventSeq[ev.ID] = ch.nextSeq
+	}
 
-		if len(ch.eventSeq) > maxTrackedEvents {
-			for evID, seq := range ch.eventSeq {
-				if seq+maxTrackedEvents <= ch.nextSeq {
-					delete(ch.eventSeq, evID)
-				}
-			}
-		}
+	if ch == nil {
+		return
+	}
 
-		ch.Unlock()
+	// Only events newer than lastSeq can still advance the marker. If even
+	// those exceed the bound, the oldest go first as a newer one supersedes them.
+	if len(ch.eventSeq) > maxTrackedEvents {
+		pruneEventSeq(ch)
+	}
+
+	ch.Unlock()
+}
+
+// pruneEventSeq drops the positions that cannot advance LastEventID, then the
+// oldest ones beyond maxTrackedEvents. The caller holds ch's lock.
+func pruneEventSeq(ch *Channel) {
+	for evID, seq := range ch.eventSeq {
+		if seq <= ch.lastSeq {
+			delete(ch.eventSeq, evID)
+		}
+	}
+
+	if len(ch.eventSeq) <= maxTrackedEvents {
+		return
+	}
+
+	seqs := make([]uint64, 0, len(ch.eventSeq))
+	for _, seq := range ch.eventSeq {
+		seqs = append(seqs, seq)
+	}
+
+	slices.Sort(seqs)
+
+	cutoff := seqs[len(seqs)-maxTrackedEvents]
+	for evID, seq := range ch.eventSeq {
+		if seq < cutoff {
+			delete(ch.eventSeq, evID)
+		}
 	}
 }
 
