@@ -161,8 +161,8 @@ func (c *Client) handleCanonicalAlias(_ context.Context, ev *event.Event) {
 	ch.Unlock()
 }
 
-// maxTrackedEvents bounds Channel.eventSeq, which keeps events that never decrypt.
-const maxTrackedEvents = 1024
+// pruneThreshold is the minimum Channel.eventSeq size that triggers a prune.
+const pruneThreshold = 1024
 
 // noteTimeline records the sync timeline position of the messages in res before
 // they are dispatched. Encrypted messages with a late room key are delivered
@@ -209,17 +209,17 @@ func (c *Client) noteTimelineLocked(roomID id.RoomID, events []*event.Event) {
 		return
 	}
 
-	// Only events newer than lastSeq can still advance the marker. If even
-	// those exceed the bound, the oldest go first as a newer one supersedes them.
-	if len(ch.eventSeq) > maxTrackedEvents {
+	if len(ch.eventSeq) > max(ch.pruneAt, pruneThreshold) {
 		pruneEventSeq(ch)
 	}
 
 	ch.Unlock()
 }
 
-// pruneEventSeq drops the positions that cannot advance LastEventID, then the
-// oldest ones beyond maxTrackedEvents. The caller holds ch's lock.
+// pruneEventSeq drops the positions that cannot advance LastEventID. Pending
+// events newer than lastSeq are never evicted, as their late delivery must still
+// be able to advance it; they are bounded by the undelivered tail of the room.
+// The caller holds ch's lock.
 func pruneEventSeq(ch *Channel) {
 	for evID, seq := range ch.eventSeq {
 		if seq <= ch.lastSeq {
@@ -227,23 +227,8 @@ func pruneEventSeq(ch *Channel) {
 		}
 	}
 
-	if len(ch.eventSeq) <= maxTrackedEvents {
-		return
-	}
-
-	seqs := make([]uint64, 0, len(ch.eventSeq))
-	for _, seq := range ch.eventSeq {
-		seqs = append(seqs, seq)
-	}
-
-	slices.Sort(seqs)
-
-	cutoff := seqs[len(seqs)-maxTrackedEvents]
-	for evID, seq := range ch.eventSeq {
-		if seq < cutoff {
-			delete(ch.eventSeq, evID)
-		}
-	}
+	// Avoid rescanning on every sync while a large tail stays pending.
+	ch.pruneAt = 2 * len(ch.eventSeq)
 }
 
 // noteActivity records the newest message of a room, including
