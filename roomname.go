@@ -161,6 +161,22 @@ func (ch *Channel) nameUnresolvedLocked() bool {
 	return ch.Name == "" && ch.Alias == "" && !ch.IsDirect && !ch.nameChecked && !ch.nameGaveUp
 }
 
+// noteSelfMembershipLocked tracks our own membership. Only an actual change, not a
+// profile update that repeats the join, starts a new epoch: it discards the lookups
+// in flight and lets a room that was given up on be healed again. ch must be locked.
+func (ch *Channel) noteSelfMembershipLocked(joined bool) {
+	if ch.selfJoined == joined {
+		return
+	}
+
+	ch.selfJoined = joined
+	ch.nameEpoch++
+
+	if joined {
+		ch.nameGaveUp = false
+	}
+}
+
 // reportNameLocked records display as the name the consumer holds. While a callback is
 // being delivered the baseline stays, as the callback carries an older name, and the
 // delivery loop of notifyRoomName compares again once the callback returned. ch must be locked.
@@ -346,13 +362,15 @@ func (c *Client) healRoomName(roomID id.RoomID) {
 		return
 	}
 
+	epoch := c.nameEpoch(roomID)
+
 	go func() {
 		defer c.nameHealing.Delete(roomID)
 
 		delay := nameHealInitialDelay
 
 		for attempt := 1; attempt <= nameHealMaxAttempts; attempt++ {
-			resolved, final := c.attemptRoomName(roomID)
+			resolved, final := c.attemptRoomName(roomID, epoch)
 			if final {
 				return
 			}
@@ -377,14 +395,14 @@ func (c *Client) healRoomName(roomID id.RoomID) {
 		}
 
 		c.logger.Warnf("giving up resolving room name for %s", roomID)
-		c.giveUpRoomName(roomID)
+		c.giveUpRoomName(roomID, epoch)
 	}()
 }
 
 // giveUpRoomName stops the sync and listing from starting healing for a room again,
 // until we join it again. Without it a forbidden room, or one that ran out of
 // attempts, would restart with a fresh retry budget on every listing or sync.
-func (c *Client) giveUpRoomName(roomID id.RoomID) {
+func (c *Client) giveUpRoomName(roomID id.RoomID, epoch uint64) {
 	c.RLock()
 	ch, ok := c.channels[roomID]
 	c.RUnlock()
@@ -394,30 +412,42 @@ func (c *Client) giveUpRoomName(roomID id.RoomID) {
 	}
 
 	ch.Lock()
-	ch.nameGaveUp = true
-	ch.Unlock()
+	defer ch.Unlock()
+
+	// After we joined or left again, the result belongs to the previous membership.
+	if ch.nameEpoch == epoch {
+		ch.nameGaveUp = true
+	}
+}
+
+// nameEpoch returns the current epoch of a room, see Channel.nameEpoch.
+func (c *Client) nameEpoch(roomID id.RoomID) uint64 {
+	c.RLock()
+	ch, ok := c.channels[roomID]
+	c.RUnlock()
+
+	if !ok {
+		return 0
+	}
+
+	ch.RLock()
+	defer ch.RUnlock()
+
+	return ch.nameEpoch
 }
 
 // attemptRoomName makes one lookup. It returns whether the room now has a name or
 // alias, and whether retrying is pointless: the room is gone, the server confirmed
 // it has neither (like a 404 on a Mattermost channel), or the client stopped.
-func (c *Client) attemptRoomName(roomID id.RoomID) (bool, bool) {
-	select {
-	case <-c.ctx.Done():
-		return false, true
-	case c.nameLookups <- struct{}{}:
-	}
-
+func (c *Client) attemptRoomName(roomID id.RoomID, epoch uint64) (bool, bool) {
 	err := c.RefreshRoomName(c.ctx, roomID)
-
-	<-c.nameLookups
 
 	switch {
 	case c.ctx.Err() != nil || errors.Is(err, mautrix.MUnknownToken):
 		// Not about the room, a later sync or listing may try again.
 		return false, true
 	case errors.Is(err, mautrix.MForbidden):
-		c.giveUpRoomName(roomID)
+		c.giveUpRoomName(roomID, epoch)
 
 		return false, true
 	}
@@ -451,8 +481,15 @@ func (c *Client) RefreshRoomName(ctx context.Context, roomID id.RoomID) error {
 	}
 
 	ch.RLock()
-	nameRev, aliasRev := ch.nameRev, ch.aliasRev
+	nameRev, aliasRev, epoch := ch.nameRev, ch.aliasRev, ch.nameEpoch
 	ch.RUnlock()
+
+	select {
+	case c.nameLookups <- struct{}{}:
+		defer func() { <-c.nameLookups }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, nameLookupTimeout)
 	defer cancel()
@@ -470,6 +507,11 @@ func (c *Client) RefreshRoomName(ctx context.Context, roomID id.RoomID) error {
 
 	ch.Lock()
 	defer ch.Unlock()
+
+	// The result belongs to a previous membership if we joined or left meanwhile.
+	if ch.nameEpoch != epoch {
+		return errors.Join(lookupError(nameErr), lookupError(aliasErr))
+	}
 
 	// A sync event that arrived in the meantime, a clear included, is newer than the fetched state.
 	if ch.Name == "" && name.Name != "" && ch.nameRev == nameRev {

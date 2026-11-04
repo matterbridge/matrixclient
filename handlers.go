@@ -112,6 +112,8 @@ func (c *Client) applyMember(ev *event.Event, member *event.MemberEventContent, 
 		for roomID, other := range c.channels {
 			other.RLock()
 			_, in := other.Members[targetID]
+			// A hero names the room even when it is not among the members.
+			in = in || slices.Contains(other.heroes, targetID)
 			other.RUnlock()
 
 			if in {
@@ -125,14 +127,14 @@ func (c *Client) applyMember(ev *event.Event, member *event.MemberEventContent, 
 	ch := c.channelLocked(ev.RoomID)
 
 	ch.Lock()
+
+	if targetID == c.mc.UserID {
+		ch.noteSelfMembershipLocked(member.Membership == event.MembershipJoin)
+	}
+
 	switch member.Membership {
 	case event.MembershipJoin, event.MembershipInvite:
 		ch.Members[targetID] = u
-
-		// Joining again is a lifecycle change that can make a forbidden room readable.
-		if targetID == c.mc.UserID && member.Membership == event.MembershipJoin {
-			ch.nameGaveUp = false
-		}
 	default:
 		delete(ch.Members, targetID)
 	}

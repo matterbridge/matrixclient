@@ -58,6 +58,8 @@ type Channel struct {
 	delivering   bool        // a name callback is running, see reportNameLocked
 	renameAgain  bool        // the name was reported while delivering, re-evaluate it afterwards
 	nameGaveUp   bool        // healing ended without a name (forbidden, or out of attempts), see healRoomName
+	selfJoined   bool        // we are joined, as last seen in our member event
+	nameEpoch    uint64      // incremented when we join or leave, lookups of an older epoch are discarded
 
 	LastActivity int64      // timestamp in milliseconds of the newest message seen, 0 if none
 	LastEventID  id.EventID // newest message event seen, set during the initial sync as well
