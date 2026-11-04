@@ -169,9 +169,9 @@ func (c *Client) noteActivity(roomID id.RoomID, eventID id.EventID, ts int64) {
 	ch := c.channelLocked(roomID)
 
 	ch.Lock()
-	if ts >= ch.LastActivity {
-		ch.LastActivity, ch.LastEventID = ts, eventID
-	}
+	ch.LastActivity = max(ch.LastActivity, ts)
+	// Sync delivers events in timeline order, which may differ from origin_server_ts.
+	ch.LastEventID = eventID
 	ch.Unlock()
 }
 
