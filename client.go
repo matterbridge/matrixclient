@@ -439,7 +439,7 @@ func (c *Client) Rooms() []RoomInfo {
 		ch.Lock()
 
 		display := c.displayNameLocked(roomID, ch)
-		ch.reportedName = display
+		ch.reportNameLocked(display)
 
 		unresolved, direct, members, last := ch.nameUnresolvedLocked(), ch.IsDirect, len(ch.Members), ch.LastActivity
 

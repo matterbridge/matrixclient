@@ -158,7 +158,20 @@ func shortRoomID(roomID id.RoomID) string {
 // the server was not yet confirmed to have none, so its name may still be missing
 // because the state was lost. ch must be locked.
 func (ch *Channel) nameUnresolvedLocked() bool {
-	return ch.Name == "" && ch.Alias == "" && !ch.IsDirect && !ch.nameChecked
+	return ch.Name == "" && ch.Alias == "" && !ch.IsDirect && !ch.nameChecked && !ch.nameGaveUp
+}
+
+// reportNameLocked records display as the name the consumer holds. While a callback is
+// being delivered the baseline stays, as the callback carries an older name, and the
+// delivery loop of notifyRoomName compares again once the callback returned. ch must be locked.
+func (ch *Channel) reportNameLocked(display string) {
+	if ch.delivering {
+		ch.renameAgain = true
+
+		return
+	}
+
+	ch.reportedName = display
 }
 
 // ResolveRoomName returns the channel name of roomID, as Rooms lists it. A room
@@ -192,16 +205,18 @@ func (c *Client) ResolveRoomName(ctx context.Context, roomID id.RoomID) string {
 	ch.Lock()
 	defer ch.Unlock()
 
-	ch.reportedName = c.displayNameLocked(roomID, ch)
+	display := c.displayNameLocked(roomID, ch)
+	ch.reportNameLocked(display)
 
-	return ch.reportedName
+	return display
 }
 
 // notifyRoomName delivers a RoomRename, or with healed the WithRoomNameResolved
 // callback, if the channel name of roomID differs from the one last reported through
-// Rooms, ResolveRoomName or a callback. Without healed a room never reported is
-// skipped, as the consumer does not know it yet. The state change and the callback
-// are one step under nameNotify, so callbacks arrive in the order of the names.
+// Rooms, ResolveRoomName or a callback. A room never reported is skipped in both
+// cases, the consumer does not know it yet and gets the current name when it asks.
+// Deliveries are serialized by nameNotify so callbacks arrive in the order of the
+// names. No other lock is held during a callback, so it may call client methods.
 func (c *Client) notifyRoomName(roomID id.RoomID, healed bool) {
 	h, isHandler := c.handler.(RoomNameHandler)
 	if healed && c.nameResolved == nil || !healed && (!isHandler || !c.synced.Load()) {
@@ -211,35 +226,70 @@ func (c *Client) notifyRoomName(roomID id.RoomID, healed bool) {
 	c.nameNotify.Lock()
 	defer c.nameNotify.Unlock()
 
+	for {
+		old, name, display, changed := c.claimRoomName(roomID)
+		if !changed {
+			return
+		}
+
+		if healed {
+			c.nameResolved(roomID, name)
+		} else {
+			h.OnRoomName(&RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: display})
+		}
+
+		if !c.finishRoomName(roomID) {
+			return
+		}
+	}
+}
+
+// claimRoomName moves the reported name of a room to its current name and marks the
+// delivery of the callback as running, see reportNameLocked.
+func (c *Client) claimRoomName(roomID id.RoomID) (old, name, display string, changed bool) {
 	c.RLock()
+	defer c.RUnlock()
+
 	ch, ok := c.channels[roomID]
-
 	if !ok {
-		c.RUnlock()
-
-		return
+		return "", "", "", false
 	}
 
 	ch.Lock()
-	old := ch.reportedName
-	name := c.displayNameLocked(roomID, ch)
-	display := ch.RawName
-	changed := name != old && !ch.IsDirect && (healed || old != "")
+	defer ch.Unlock()
 
-	if changed {
-		ch.reportedName = name
+	old = ch.reportedName
+	name = c.displayNameLocked(roomID, ch)
+
+	if name == old || old == "" || ch.IsDirect {
+		return "", "", "", false
 	}
 
-	ch.Unlock()
-	c.RUnlock()
+	ch.reportedName = name
+	ch.delivering = true
+	ch.renameAgain = false
 
-	switch {
-	case !changed:
-	case healed:
-		c.nameResolved(roomID, name)
-	default:
-		h.OnRoomName(&RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: display})
+	return old, name, ch.RawName, true
+}
+
+// finishRoomName ends the delivery of a callback and reports whether the room
+// was reported meanwhile, in which case its name has to be compared again.
+func (c *Client) finishRoomName(roomID id.RoomID) bool {
+	c.RLock()
+	defer c.RUnlock()
+
+	ch, ok := c.channels[roomID]
+	if !ok {
+		return false
 	}
+
+	ch.Lock()
+	defer ch.Unlock()
+
+	again := ch.renameAgain
+	ch.delivering, ch.renameAgain = false, false
+
+	return again
 }
 
 // noteRoomNames reports the channel name changes of the rooms in res, once all
@@ -327,7 +377,25 @@ func (c *Client) healRoomName(roomID id.RoomID) {
 		}
 
 		c.logger.Warnf("giving up resolving room name for %s", roomID)
+		c.giveUpRoomName(roomID)
 	}()
+}
+
+// giveUpRoomName stops the sync and listing from starting healing for a room again,
+// until we join it again. Without it a forbidden room, or one that ran out of
+// attempts, would restart with a fresh retry budget on every listing or sync.
+func (c *Client) giveUpRoomName(roomID id.RoomID) {
+	c.RLock()
+	ch, ok := c.channels[roomID]
+	c.RUnlock()
+
+	if !ok {
+		return
+	}
+
+	ch.Lock()
+	ch.nameGaveUp = true
+	ch.Unlock()
 }
 
 // attemptRoomName makes one lookup. It returns whether the room now has a name or
@@ -344,7 +412,13 @@ func (c *Client) attemptRoomName(roomID id.RoomID) (bool, bool) {
 
 	<-c.nameLookups
 
-	if c.ctx.Err() != nil || errors.Is(err, mautrix.MForbidden) || errors.Is(err, mautrix.MUnknownToken) {
+	switch {
+	case c.ctx.Err() != nil || errors.Is(err, mautrix.MUnknownToken):
+		// Not about the room, a later sync or listing may try again.
+		return false, true
+	case errors.Is(err, mautrix.MForbidden):
+		c.giveUpRoomName(roomID)
+
 		return false, true
 	}
 

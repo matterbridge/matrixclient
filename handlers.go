@@ -128,6 +128,11 @@ func (c *Client) applyMember(ev *event.Event, member *event.MemberEventContent, 
 	switch member.Membership {
 	case event.MembershipJoin, event.MembershipInvite:
 		ch.Members[targetID] = u
+
+		// Joining again is a lifecycle change that can make a forbidden room readable.
+		if targetID == c.mc.UserID && member.Membership == event.MembershipJoin {
+			ch.nameGaveUp = false
+		}
 	default:
 		delete(ch.Members, targetID)
 	}

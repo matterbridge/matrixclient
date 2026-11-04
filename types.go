@@ -55,6 +55,9 @@ type Channel struct {
 
 	heroes       []id.UserID // members the server suggests to name the room after, from the sync summary
 	reportedName string      // channel name last reported to the consumer, see RoomNameHandler
+	delivering   bool        // a name callback is running, see reportNameLocked
+	renameAgain  bool        // the name was reported while delivering, re-evaluate it afterwards
+	nameGaveUp   bool        // healing ended without a name (forbidden, or out of attempts), see healRoomName
 
 	LastActivity int64      // timestamp in milliseconds of the newest message seen, 0 if none
 	LastEventID  id.EventID // newest message event seen, set during the initial sync as well
