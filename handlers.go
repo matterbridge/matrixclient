@@ -139,10 +139,15 @@ func (c *Client) handleRoomName(_ context.Context, ev *event.Event) {
 	ch.Lock()
 	defer ch.Unlock()
 
-	ch.RawName = name.Name
+	ch.setNameLocked(name.Name)
+}
+
+// setNameLocked sets the room name, ch must be locked.
+func (ch *Channel) setNameLocked(name string) {
+	ch.RawName = name
 	ch.Name = ""
-	if name.Name != "" {
-		ch.Name = "#" + strings.ReplaceAll(name.Name, " ", "")
+	if name != "" {
+		ch.Name = "#" + strings.ReplaceAll(name, " ", "")
 	}
 }
 

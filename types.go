@@ -48,6 +48,8 @@ type Channel struct {
 	Encrypted  bool
 	Topic      string
 
+	nameChecked bool // the server confirmed the room has no name or alias, see resolveRoomNames
+
 	LastActivity int64      // timestamp in milliseconds of the newest message seen, 0 if none
 	LastEventID  id.EventID // newest message event seen, set during the initial sync as well
 

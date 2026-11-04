@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -15,6 +16,10 @@ const (
 	maxSyncRetryWait = 30 * time.Second
 	maxLoginRetries  = 10
 	defaultRateLimit = 3 * time.Second
+
+	// Bounds the room name lookups of one maintenance tick.
+	maxNameResolves    = 5
+	nameResolveTimeout = 30 * time.Second
 
 	// Users not seen active for this long are reported offline, matching matterclient.
 	activeThreshold = 20 * time.Minute
@@ -177,8 +182,83 @@ func (c *Client) maintainPresence() {
 			return
 		case <-ticker.C:
 			c.expirePresence(time.Now())
+			c.resolveRoomNames()
 		}
 	}
+}
+
+// resolveRoomNames fetches the name and canonical alias of rooms that have
+// neither, for example when the state was lost during a slow or failed sync.
+// Failures are retried on the next tick. A room the server reports as having
+// neither is not asked again, later changes arrive through the sync.
+func (c *Client) resolveRoomNames() {
+	if !c.synced.Load() {
+		return
+	}
+
+	var roomIDs []id.RoomID
+
+	c.RLock()
+
+	for roomID, ch := range c.channels {
+		ch.RLock()
+
+		if ch.Name == "" && ch.Alias == "" && !ch.IsDirect && !ch.nameChecked && len(roomIDs) < maxNameResolves {
+			roomIDs = append(roomIDs, roomID)
+		}
+
+		ch.RUnlock()
+	}
+
+	c.RUnlock()
+
+	for _, roomID := range roomIDs {
+		if c.ctx.Err() != nil {
+			return
+		}
+
+		c.resolveRoomName(roomID)
+	}
+}
+
+func (c *Client) resolveRoomName(roomID id.RoomID) {
+	ctx, cancel := context.WithTimeout(c.ctx, nameResolveTimeout)
+	defer cancel()
+
+	var (
+		name  event.RoomNameEventContent
+		alias event.CanonicalAliasEventContent
+	)
+
+	nameErr := c.mc.StateEvent(ctx, roomID, event.StateRoomName, "", &name)
+	aliasErr := c.mc.StateEvent(ctx, roomID, event.StateCanonicalAlias, "", &alias)
+
+	missing := errors.Is(nameErr, mautrix.MNotFound) && errors.Is(aliasErr, mautrix.MNotFound)
+	if (nameErr != nil && !errors.Is(nameErr, mautrix.MNotFound)) || (aliasErr != nil && !errors.Is(aliasErr, mautrix.MNotFound)) {
+		c.logger.Warnf("fetching name of %s: %s", roomID, errors.Join(nameErr, aliasErr))
+	}
+
+	c.RLock()
+	ch, ok := c.channels[roomID]
+	c.RUnlock()
+
+	if !ok {
+		return
+	}
+
+	ch.Lock()
+	defer ch.Unlock()
+
+	// A sync event that arrived in the meantime is newer than the fetched state.
+	if ch.Name == "" && name.Name != "" {
+		ch.setNameLocked(name.Name)
+	}
+
+	if ch.Alias == "" && alias.Alias != "" {
+		ch.Alias, ch.AltAliases = alias.Alias, alias.AltAliases
+	}
+
+	ch.nameChecked = missing
 }
 
 func (c *Client) expirePresence(now time.Time) {
