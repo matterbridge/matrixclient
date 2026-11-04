@@ -102,6 +102,8 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 	}
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
+	mc.Client.Transport = newAPILogTransport(mc.Client.Transport, c.apiLogger)
+
 	syncer, ok := mc.Syncer.(*mautrix.DefaultSyncer)
 	if !ok {
 		return nil, errors.New("matrixclient: unexpected syncer type")
