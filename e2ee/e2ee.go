@@ -112,11 +112,17 @@ func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 	}
 
 	// ResolveTrustContext discards IsUserTrusted errors and falls back to TOFU or
-	// untrusted, so surface them rather than report a definitive state.
+	// untrusted, so retry it to surface errors and honor a trusted result.
 	if trust == id.TrustStateCrossSignedTOFU || trust == id.TrustStateCrossSignedUntrusted {
-		_, err = m.IsUserTrusted(ctx, h.client.UserID)
+		var trusted bool
+
+		trusted, err = m.IsUserTrusted(ctx, h.client.UserID)
 		if err != nil {
 			return false, fmt.Errorf("check own user trust: %w", err)
+		}
+
+		if trusted {
+			trust = id.TrustStateCrossSignedVerified
 		}
 	}
 
