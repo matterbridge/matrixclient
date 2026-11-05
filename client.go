@@ -620,7 +620,7 @@ func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.E
 
 		c.Lock()
 		c.directData[userID] = direct[userID]
-		c.addDirectLocked(roomID, userID, nil)
+		c.addDirectLocked(roomID, userID)
 		c.Unlock()
 	}
 

@@ -35,11 +35,11 @@ func (c *Client) syncInvitations(_ context.Context, res *mautrix.RespSync, _ str
 
 		if invite, ok := c.invitations[roomID]; ok && invite.Direct {
 			c.acceptedDirect[roomID] = invite.Sender
-			c.addDirectLocked(roomID, invite.Sender, nil)
+			c.addDirectLocked(roomID, invite.Sender)
 		}
 
 		for _, userID := range c.dmChannels[roomID] {
-			c.addDirectLocked(roomID, userID, nil)
+			c.addDirectLocked(roomID, userID)
 		}
 
 		delete(c.invitations, roomID)

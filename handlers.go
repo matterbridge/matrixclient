@@ -21,24 +21,13 @@ func (c *Client) channelLocked(roomID id.RoomID) *Channel {
 	return ch
 }
 
-// addDirectLocked marks roomID as direct with userID. A nil member keeps any
-// cached profile of the user.
-func (c *Client) addDirectLocked(roomID id.RoomID, userID id.UserID, member *event.MemberEventContent) {
-	u, ok := c.users[userID]
-	if !ok {
-		u = &User{ID: userID}
-		c.users[userID] = u
-	}
-
-	if member != nil {
-		u.MemberEventContent = member
-	}
-
+// addDirectLocked records a DM association, not room membership. Account data
+// and saved invitations can refer to users who have already left the room.
+func (c *Client) addDirectLocked(roomID id.RoomID, userID id.UserID) {
 	ch := c.channelLocked(roomID)
 
 	ch.Lock()
 	ch.IsDirect = true
-	ch.Members[userID] = u
 	ch.Unlock()
 
 	if !slices.Contains(c.dmChannels[roomID], userID) {
@@ -71,12 +60,12 @@ func (c *Client) handleDM(_ context.Context, ev *event.Event) {
 		c.directData[userID] = slices.Clone(rooms)
 
 		for _, roomID := range rooms {
-			c.addDirectLocked(roomID, userID, nil)
+			c.addDirectLocked(roomID, userID)
 		}
 	}
 
 	for roomID, userID := range c.acceptedDirect {
-		c.addDirectLocked(roomID, userID, nil)
+		c.addDirectLocked(roomID, userID)
 	}
 }
 
@@ -153,7 +142,7 @@ func (c *Client) applyMember(ev *event.Event, member *event.MemberEventContent, 
 	ch.Unlock()
 
 	if member.IsDirect {
-		c.addDirectLocked(ev.RoomID, targetID, member)
+		c.addDirectLocked(ev.RoomID, targetID)
 	}
 }
 
