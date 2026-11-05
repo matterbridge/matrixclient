@@ -463,6 +463,10 @@ func (c *Client) healRoomName(parent context.Context, roomID id.RoomID, ch *Chan
 				// A room confirmed to have no name may turn out to be a DM. That is reported through
 				// RoomNameHandler, so it does not depend on the optional WithRoomNameResolved callback.
 				if ctx.Err() == nil {
+					if resolved {
+						c.notifyRoomName(roomID, true)
+					}
+
 					c.notifyRoomName(roomID, false)
 				}
 
