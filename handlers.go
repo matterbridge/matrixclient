@@ -129,7 +129,9 @@ func (c *Client) applyMember(ev *event.Event, member *event.MemberEventContent, 
 	ch.Lock()
 
 	if targetID == c.mc.UserID {
-		ch.noteSelfMembershipLocked(member.Membership == event.MembershipJoin)
+		if ch.noteSelfMembershipLocked(member.Membership == event.MembershipJoin) {
+			c.cancelNameHealing(ev.RoomID)
+		}
 	}
 
 	switch member.Membership {

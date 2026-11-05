@@ -164,9 +164,9 @@ func (ch *Channel) nameUnresolvedLocked() bool {
 // noteSelfMembershipLocked tracks our own membership. Only an actual change, not a
 // profile update that repeats the join, starts a new epoch: it discards the lookups
 // in flight and lets a room that was given up on be healed again. ch must be locked.
-func (ch *Channel) noteSelfMembershipLocked(joined bool) {
+func (ch *Channel) noteSelfMembershipLocked(joined bool) bool {
 	if ch.selfJoined == joined {
-		return
+		return false
 	}
 
 	ch.selfJoined = joined
@@ -175,6 +175,8 @@ func (ch *Channel) noteSelfMembershipLocked(joined bool) {
 	if joined {
 		ch.nameGaveUp = false
 	}
+
+	return true
 }
 
 // reportNameLocked records display as the name the consumer holds. While a callback is
@@ -358,7 +360,11 @@ func (c *Client) noteRoomNames(res *mautrix.RespSync) {
 // when the room is gone, after nameHealMaxAttempts, or when the client stops.
 // The WithRoomNameResolved callback is called once the name changed from the one reported.
 func (c *Client) healRoomName(roomID id.RoomID, ch *Channel) {
-	if _, running := c.nameHealing.LoadOrStore(roomID, struct{}{}); running {
+	ctx, cancel := context.WithCancel(c.ctx)
+
+	if _, running := c.nameHealing.LoadOrStore(roomID, cancel); running {
+		cancel()
+
 		return
 	}
 
@@ -368,12 +374,16 @@ func (c *Client) healRoomName(roomID id.RoomID, ch *Channel) {
 	ch.RUnlock()
 
 	go func() {
-		defer c.nameHealing.Delete(roomID)
+		defer func() {
+			cancel()
+			c.nameHealing.Delete(roomID)
+			c.restartStaleHealing(roomID, ch, epoch)
+		}()
 
 		delay := nameHealInitialDelay
 
 		for attempt := 1; attempt <= nameHealMaxAttempts; attempt++ {
-			resolved, final := c.attemptRoomName(roomID, epoch)
+			resolved, final := c.attemptRoomName(ctx, roomID, epoch)
 			if final {
 				return
 			}
@@ -389,7 +399,7 @@ func (c *Client) healRoomName(roomID id.RoomID, ch *Channel) {
 				roomID, attempt, nameHealMaxAttempts, delay)
 
 			select {
-			case <-c.ctx.Done():
+			case <-ctx.Done():
 				return
 			case <-time.After(delay):
 			}
@@ -400,6 +410,32 @@ func (c *Client) healRoomName(roomID id.RoomID, ch *Channel) {
 		c.logger.Warnf("giving up resolving room name for %s", roomID)
 		c.giveUpRoomName(roomID, epoch)
 	}()
+}
+
+// cancelNameHealing stops the healing of a room whose membership changed, so that the
+// next sync or listing can start one for the new epoch instead of finding a stale one running.
+func (c *Client) cancelNameHealing(roomID id.RoomID) {
+	cancel, ok := c.nameHealing.Load(roomID)
+	if ok {
+		cancel.(context.CancelFunc)()
+	}
+}
+
+// restartStaleHealing starts healing again when the one that just ended belonged to a
+// previous membership epoch and the room still has no name. Its guard entry blocked
+// the starts requested in the meantime.
+func (c *Client) restartStaleHealing(roomID id.RoomID, ch *Channel, epoch uint64) {
+	if c.ctx.Err() != nil {
+		return
+	}
+
+	ch.RLock()
+	stale := ch.nameEpoch != epoch && ch.nameUnresolvedLocked()
+	ch.RUnlock()
+
+	if stale {
+		c.healRoomName(roomID, ch)
+	}
 }
 
 // giveUpRoomName stops the sync and listing from starting healing for a room again,
@@ -426,11 +462,11 @@ func (c *Client) giveUpRoomName(roomID id.RoomID, epoch uint64) {
 // attemptRoomName makes one lookup. It returns whether the room now has a name or
 // alias, and whether retrying is pointless: the room is gone, the server confirmed
 // it has neither (like a 404 on a Mattermost channel), or the client stopped.
-func (c *Client) attemptRoomName(roomID id.RoomID, epoch uint64) (bool, bool) {
-	err := c.RefreshRoomName(c.ctx, roomID)
+func (c *Client) attemptRoomName(ctx context.Context, roomID id.RoomID, epoch uint64) (bool, bool) {
+	err := c.RefreshRoomName(ctx, roomID)
 
 	switch {
-	case c.ctx.Err() != nil || errors.Is(err, mautrix.MUnknownToken):
+	case ctx.Err() != nil || errors.Is(err, mautrix.MUnknownToken):
 		// Not about the room, a later sync or listing may try again.
 		return false, true
 	case errors.Is(err, mautrix.MForbidden):
