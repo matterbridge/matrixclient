@@ -31,7 +31,8 @@ updates. Rooms observed leaving are excluded from `DirectRoom()` and `Rooms()`
 until they are joined again, even if stale `m.direct` data still lists them.
 Their DM classification is retained for final or late-decrypted incoming events
 and reused when rejoining without a new invitation or `m.direct` update.
-Restoring DM associations does not add members; room membership follows
+`Join` persists an accepted direct invitation to `m.direct` so it survives a
+restart. Restoring DM associations does not add members; room membership follows
 membership events independently of direct-room classification.
 
 ## Encrypted rooms

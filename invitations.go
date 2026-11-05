@@ -3,6 +3,8 @@ package matrixclient
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
@@ -70,6 +72,49 @@ func (c *Client) syncInvitations(_ context.Context, res *mautrix.RespSync, _ str
 	}
 
 	return true
+}
+
+// persistAcceptedDirect records a joined direct invitation in m.direct, which
+// the homeserver does not do, so the DM association survives a restart.
+func (c *Client) persistAcceptedDirect(ctx context.Context, roomID id.RoomID) {
+	c.Lock()
+
+	userID, ok := c.acceptedDirect[roomID]
+	if !ok {
+		invite, invited := c.invitations[roomID]
+		if !invited || !invite.Direct {
+			c.Unlock()
+
+			return
+		}
+
+		userID = invite.Sender
+		c.acceptedDirect[roomID] = userID
+	}
+
+	direct := maps.Clone(c.directData)
+	c.Unlock()
+
+	if slices.Contains(direct[userID], roomID) {
+		return
+	}
+
+	if direct == nil {
+		direct = make(map[id.UserID][]id.RoomID)
+	}
+
+	direct[userID] = append(slices.Clone(direct[userID]), roomID)
+
+	err := c.mc.SetAccountData(ctx, event.AccountDataDirectChats.Type, direct)
+	if err != nil {
+		c.logger.Errorf("failed to persist m.direct for %s: %s", roomID, err)
+
+		return
+	}
+
+	c.Lock()
+	c.directData[userID] = direct[userID]
+	c.Unlock()
 }
 
 // Leave state can create cache entries while it is dispatched. Remove them

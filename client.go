@@ -570,6 +570,8 @@ func (c *Client) Join(ctx context.Context, roomIDOrAlias string) (id.RoomID, err
 		return "", err
 	}
 
+	c.persistAcceptedDirect(ctx, resp.RoomID)
+
 	return resp.RoomID, nil
 }
 
