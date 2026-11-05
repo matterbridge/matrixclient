@@ -84,7 +84,13 @@ func (c *Client) handleMember(_ context.Context, ev *event.Event) {
 
 	targetID := id.UserID(*ev.StateKey)
 
-	c.applyMember(ev, member, targetID)
+	if ev.Mautrix.EventSource&event.SourceInvite != 0 {
+		if targetID != c.mc.UserID || member.Membership != event.MembershipInvite {
+			return
+		}
+	} else {
+		c.applyMember(ev, member, targetID)
+	}
 
 	if h, ok := c.handler.(MemberHandler); ok && c.synced.Load() {
 		h.OnMember(&MemberChange{

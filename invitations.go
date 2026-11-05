@@ -1,0 +1,112 @@
+package matrixclient
+
+import (
+	"context"
+	"errors"
+
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
+)
+
+// Invitations returns a snapshot of pending invitations, including direct rooms.
+// Read it once the consumer is running to display invitations received offline.
+// Joining accepts an invitation; Leave rejects it. A failed request preserves it,
+// and a successful request is reflected when the membership is synced.
+func (c *Client) Invitations() []Invitation {
+	c.RLock()
+	defer c.RUnlock()
+
+	invites := make([]Invitation, 0, len(c.invitations))
+	for _, invite := range c.invitations {
+		invites = append(invites, invite)
+	}
+
+	return invites
+}
+
+// syncInvitations updates membership before dispatch, so callbacks and room
+// listings never treat a pending invitation as a joined room through m.direct.
+func (c *Client) syncInvitations(_ context.Context, res *mautrix.RespSync, _ string) bool {
+	c.Lock()
+
+	for roomID := range res.Rooms.Join {
+		delete(c.invitations, roomID)
+	}
+
+	c.Unlock()
+
+	for roomID, room := range res.Rooms.Invite {
+		invite := c.parseInvitation(roomID, room.State.Events)
+		if invite.Sender == "" {
+			c.logger.Warnf("invitation for %s has no valid self membership event", roomID)
+
+			continue
+		}
+
+		c.Lock()
+		previous, exists := c.invitations[roomID]
+		c.invitations[roomID] = invite
+		c.Unlock()
+
+		if h, ok := c.handler.(InviteHandler); ok && c.synced.Load() && (!exists || previous != invite) {
+			h.OnInvite(&invite)
+		}
+	}
+
+	return true
+}
+
+// Leave state can create cache entries while it is dispatched. Remove them
+// afterwards so a rejected or revoked invitation never becomes a listed room.
+func (c *Client) removeLeftInvitations(res *mautrix.RespSync) {
+	c.Lock()
+	defer c.Unlock()
+
+	for roomID := range res.Rooms.Leave {
+		if _, invited := c.invitations[roomID]; invited {
+			delete(c.invitations, roomID)
+			delete(c.channels, roomID)
+			delete(c.dmChannels, roomID)
+		}
+	}
+}
+
+func (c *Client) parseInvitation(roomID id.RoomID, events []*event.Event) Invitation {
+	invite := Invitation{RoomID: roomID}
+
+	for _, ev := range events {
+		ev.Type.Class = event.StateEventType
+
+		if ev.Type != event.StateMember && ev.Type != event.StateRoomName && ev.Type != event.StateCanonicalAlias {
+			continue
+		}
+
+		err := ev.Content.ParseRaw(ev.Type)
+		if err != nil && !errors.Is(err, event.ErrContentAlreadyParsed) {
+			c.logger.Warnf("failed to parse %s in invitation for %s: %s", ev.Type, roomID, err)
+
+			continue
+		}
+
+		switch ev.Type {
+		case event.StateMember:
+			if ev.StateKey == nil || *ev.StateKey != string(c.mc.UserID) {
+				continue
+			}
+
+			member := ev.Content.AsMember()
+			if member.Membership == event.MembershipInvite {
+				invite.Sender = ev.Sender
+				invite.Reason = member.Reason
+				invite.Direct = member.IsDirect
+			}
+		case event.StateRoomName:
+			invite.Name = ev.Content.AsRoomName().Name
+		case event.StateCanonicalAlias:
+			invite.Alias = ev.Content.AsCanonicalAlias().Alias
+		}
+	}
+
+	return invite
+}
