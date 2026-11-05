@@ -436,6 +436,17 @@ func (c *Client) Fingerprint() string {
 	return ""
 }
 
+// DeviceVerified reports whether our device is verified or cross-signed and
+// trusted. It queries the server, so it is not stale right after login. It is
+// false when end-to-end encryption is disabled or the account has no cross-signing.
+func (c *Client) DeviceVerified(ctx context.Context) bool {
+	if p, ok := c.crypto.(DeviceVerifier); ok {
+		return p.DeviceVerified(ctx)
+	}
+
+	return false
+}
+
 // UserID is our own user ID.
 func (c *Client) UserID() id.UserID { return c.mc.UserID }
 

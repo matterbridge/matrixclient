@@ -7,6 +7,8 @@
 package e2ee
 
 import (
+	"context"
+
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto/cryptohelper"
 	"maunium.net/go/mautrix/event"
@@ -53,6 +55,21 @@ func (h helper) Fingerprint() string {
 	}
 
 	return m.Fingerprint()
+}
+
+// DeviceVerified implements matrixclient.DeviceVerifier.
+func (h helper) DeviceVerified(ctx context.Context) bool {
+	m := h.Machine()
+	if m == nil {
+		return false
+	}
+
+	dev, err := m.GetOrFetchDevice(ctx, h.client.UserID, h.client.DeviceID)
+	if err != nil {
+		return false
+	}
+
+	return m.IsDeviceTrusted(ctx, dev)
 }
 
 // Factory returns the option to pass to matrixclient.New.
