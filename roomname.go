@@ -256,6 +256,7 @@ func (c *Client) notifyRoomName(roomID id.RoomID, healed bool) {
 	// Drops and restores of a channel always go through RoomNameHandler, also when healed.
 	transitions := isHandler && c.synced.Load()
 	names := transitions
+
 	if healed {
 		names = c.nameResolved != nil
 	}
@@ -311,37 +312,38 @@ func (c *Client) claimRoomName(roomID id.RoomID, names, transitions bool) (*Room
 	name := c.displayNameLocked(roomID, ch)
 
 	_, inferred := c.inferredDirectLocked(ch)
+	direct := ch.IsDirect || inferred
 
 	// A room handed out as a channel that turned into a DM is reported once, whatever its name,
 	// so the consumer can drop the channel. Later changes of a DM name are not reported.
-	if transitions && (ch.IsDirect || inferred) && ch.listedAsChannel {
+	if transitions && direct && ch.listedAsChannel {
 		ch.listedAsChannel, ch.droppedAsDirect = false, true
-		ch.reportedName = name
-		ch.delivering = true
-		ch.renameAgain = false
 
-		return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true, true
+		return ch.startDeliveryLocked(roomID, old, name), true, true
 	}
 
 	// The reverse transition: a room reported as a DM is a channel again, so the consumer restores it.
-	if transitions && !ch.IsDirect && !inferred && ch.droppedAsDirect && !c.departedLocked(roomID) {
-		ch.listedAsChannel, ch.droppedAsDirect = true, true
-		ch.reportedName = name
-		ch.delivering = true
-		ch.renameAgain = false
+	if transitions && !direct && ch.droppedAsDirect && !c.departedLocked(roomID) {
+		ch.listedAsChannel, ch.droppedAsDirect = true, false
 
-		return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true, false
+		return ch.startDeliveryLocked(roomID, old, name), true, true
 	}
 
-	if !names || name == old || old == "" || ch.IsDirect || inferred {
+	if !names || name == old || old == "" || direct {
 		return nil, false, false
 	}
 
+	return ch.startDeliveryLocked(roomID, old, name), true, false
+}
+
+// startDeliveryLocked moves the reported name to name and marks the delivery of a callback
+// as running. ch must be locked.
+func (ch *Channel) startDeliveryLocked(roomID id.RoomID, old, name string) *RoomRename {
 	ch.reportedName = name
 	ch.delivering = true
 	ch.renameAgain = false
 
-	return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true, false
+	return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}
 }
 
 // finishRoomName ends the delivery of a callback and reports whether the room
