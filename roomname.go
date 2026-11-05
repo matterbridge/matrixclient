@@ -213,7 +213,7 @@ func (c *Client) ResolveRoomName(ctx context.Context, roomID id.RoomID) string {
 		err := c.RefreshRoomName(ctx, roomID)
 		if err != nil {
 			c.logger.Debugf("resolving name of %s: %s", roomID, err)
-			c.healRoomName(roomID, ch)
+			c.healRoomName(c.ctx, roomID, ch)
 		}
 	}
 
@@ -349,7 +349,7 @@ func (c *Client) noteRoomNames(res *mautrix.RespSync) {
 		ch.RUnlock()
 
 		if unresolved {
-			c.healRoomName(roomID, ch)
+			c.healRoomName(c.ctx, roomID, ch)
 		}
 	}
 }
@@ -359,25 +359,30 @@ func (c *Client) noteRoomNames(res *mautrix.RespSync) {
 // example because the state was lost during a failed sync. It stops on success,
 // when the room is gone, after nameHealMaxAttempts, or when the client stops.
 // The WithRoomNameResolved callback is called once the name changed from the one reported.
-func (c *Client) healRoomName(roomID id.RoomID, ch *Channel) {
-	ctx, cancel := context.WithCancel(c.ctx)
+func (c *Client) healRoomName(parent context.Context, roomID id.RoomID, ch *Channel) {
+	ctx, cancel := context.WithCancel(parent)
 
-	if _, running := c.nameHealing.LoadOrStore(roomID, cancel); running {
+	// Only the room lock is taken, as callers may hold the client lock and a nested read lock can deadlock.
+	// Membership changes cancel healers under the room write lock, so registering and reading
+	// the epoch under the read lock keeps a cancellation paired with the epoch it belongs to.
+	ch.RLock()
+
+	_, running := c.nameHealing.LoadOrStore(roomID, cancel)
+	epoch := ch.nameEpoch
+
+	ch.RUnlock()
+
+	if running {
 		cancel()
 
 		return
 	}
 
-	// Taking only the room lock: callers may hold the client lock, and a nested read lock can deadlock.
-	ch.RLock()
-	epoch := ch.nameEpoch
-	ch.RUnlock()
-
 	go func() {
 		defer func() {
 			cancel()
 			c.nameHealing.Delete(roomID)
-			c.restartStaleHealing(roomID, ch, epoch)
+			c.restartStaleHealing(parent, roomID, ch, epoch)
 		}()
 
 		delay := nameHealInitialDelay
@@ -415,26 +420,31 @@ func (c *Client) healRoomName(roomID id.RoomID, ch *Channel) {
 // cancelNameHealing stops the healing of a room whose membership changed, so that the
 // next sync or listing can start one for the new epoch instead of finding a stale one running.
 func (c *Client) cancelNameHealing(roomID id.RoomID) {
-	cancel, ok := c.nameHealing.Load(roomID)
+	v, ok := c.nameHealing.Load(roomID)
+	if !ok {
+		return
+	}
+
+	cancel, ok := v.(context.CancelFunc)
 	if ok {
-		cancel.(context.CancelFunc)()
+		cancel()
 	}
 }
 
 // restartStaleHealing starts healing again when the one that just ended belonged to a
 // previous membership epoch and the room still has no name. Its guard entry blocked
 // the starts requested in the meantime.
-func (c *Client) restartStaleHealing(roomID id.RoomID, ch *Channel, epoch uint64) {
-	if c.ctx.Err() != nil {
+func (c *Client) restartStaleHealing(parent context.Context, roomID id.RoomID, ch *Channel, epoch uint64) {
+	if parent.Err() != nil {
 		return
 	}
 
 	ch.RLock()
-	stale := ch.nameEpoch != epoch && ch.nameUnresolvedLocked()
+	stale := ch.nameEpoch != epoch && ch.selfJoined && ch.nameUnresolvedLocked()
 	ch.RUnlock()
 
 	if stale {
-		c.healRoomName(roomID, ch)
+		c.healRoomName(parent, roomID, ch)
 	}
 }
 
