@@ -67,6 +67,17 @@ func (c *Client) handleDM(_ context.Context, ev *event.Event) {
 	for roomID, userID := range c.acceptedDirect {
 		c.addDirectLocked(roomID, userID)
 	}
+
+	// Associations not persisted yet are not in the snapshot, but still hold locally.
+	for roomID, userID := range c.pendingDirect {
+		if slices.Contains(c.directData[userID], roomID) {
+			delete(c.pendingDirect, roomID)
+
+			continue
+		}
+
+		c.addDirectLocked(roomID, userID)
+	}
 }
 
 func (c *Client) handleMember(_ context.Context, ev *event.Event) {

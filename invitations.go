@@ -97,37 +97,70 @@ func (c *Client) persistAcceptedDirect(ctx context.Context, roomID id.RoomID) {
 	c.recordDirect(ctx, userID, roomID)
 }
 
-// recordDirect adds roomID to the m.direct entry of userID. The homeserver does not
-// set m.direct, so it is persisted here to survive a restart.
+// recordDirect persists roomID as a direct room of userID. The homeserver does not set
+// m.direct, so it is written here to survive a restart. An association whose write fails
+// stays pending and is merged into later writes, as each write replaces the whole value.
 func (c *Client) recordDirect(ctx context.Context, userID id.UserID, roomID id.RoomID) {
 	c.directWriteMu.Lock()
 	defer c.directWriteMu.Unlock()
 
-	c.RLock()
+	c.Lock()
+	c.pendingDirect[roomID] = userID
 	direct := maps.Clone(c.directData)
-	c.RUnlock()
-
-	if slices.Contains(direct[userID], roomID) {
-		return
-	}
 
 	if direct == nil {
 		direct = make(map[id.UserID][]id.RoomID)
 	}
 
-	direct[userID] = append(slices.Clone(direct[userID]), roomID)
+	merged := make(map[id.RoomID]id.UserID, len(c.pendingDirect))
+
+	for pendingRoom, pendingUser := range c.pendingDirect {
+		if _, left := c.leftRooms[pendingRoom]; left {
+			delete(c.pendingDirect, pendingRoom)
+
+			continue
+		}
+
+		if slices.Contains(direct[pendingUser], pendingRoom) {
+			delete(c.pendingDirect, pendingRoom)
+
+			continue
+		}
+
+		direct[pendingUser] = append(slices.Clone(direct[pendingUser]), pendingRoom)
+		merged[pendingRoom] = pendingUser
+	}
+	c.Unlock()
+
+	if len(merged) == 0 {
+		return
+	}
 
 	err := c.mc.SetAccountData(ctx, event.AccountDataDirectChats.Type, direct)
 	if err != nil {
-		c.logger.Errorf("failed to persist m.direct for %s: %s", roomID, err)
+		c.logger.Errorf("failed to persist m.direct for %s, it is retried later: %s", roomID, err)
 
-		// Not cached, so a later call retries the write.
 		return
 	}
 
 	c.Lock()
-	c.directData[userID] = direct[userID]
+	for pendingRoom, pendingUser := range merged {
+		delete(c.pendingDirect, pendingRoom)
+
+		c.directData[pendingUser] = direct[pendingUser]
+	}
 	c.Unlock()
+}
+
+// retryDirect retries a failed m.direct write for roomID, if there is one.
+func (c *Client) retryDirect(ctx context.Context, roomID id.RoomID) {
+	c.RLock()
+	userID, ok := c.pendingDirect[roomID]
+	c.RUnlock()
+
+	if ok {
+		c.recordDirect(ctx, userID, roomID)
+	}
 }
 
 // Leave state can create cache entries while it is dispatched. Remove them
