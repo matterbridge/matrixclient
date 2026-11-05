@@ -141,7 +141,8 @@ func (c *Client) applyMember(ev *event.Event, member *event.MemberEventContent, 
 	}
 	ch.Unlock()
 
-	if member.IsDirect {
+	// Our own member event also carries is_direct, but the peer is the other user.
+	if member.IsDirect && targetID != c.mc.UserID {
 		c.addDirectLocked(ev.RoomID, targetID)
 	}
 }
