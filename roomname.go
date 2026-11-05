@@ -228,7 +228,7 @@ func (c *Client) ResolveRoomName(ctx context.Context, roomID id.RoomID) string {
 	ch.reportNameLocked(display)
 
 	if _, inferred := c.inferredDirectLocked(ch); !ch.IsDirect && !inferred {
-		ch.listedAsChannel = true
+		ch.listedAsChannel, ch.droppedAsDirect = true, false
 	}
 
 	return display
@@ -289,7 +289,17 @@ func (c *Client) claimRoomName(roomID id.RoomID) (*RoomRename, bool) {
 	// A room handed out as a channel that turned into a DM is reported once, whatever its name,
 	// so the consumer can drop the channel. Later changes of a DM name are not reported.
 	if (ch.IsDirect || inferred) && ch.listedAsChannel {
-		ch.listedAsChannel = false
+		ch.listedAsChannel, ch.droppedAsDirect = false, true
+		ch.reportedName = name
+		ch.delivering = true
+		ch.renameAgain = false
+
+		return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true
+	}
+
+	// The reverse transition: a room reported as a DM is a channel again, so the consumer restores it.
+	if !ch.IsDirect && !inferred && ch.droppedAsDirect {
+		ch.listedAsChannel, ch.droppedAsDirect = true, false
 		ch.reportedName = name
 		ch.delivering = true
 		ch.renameAgain = false
@@ -408,9 +418,10 @@ func (c *Client) healRoomName(parent context.Context, roomID id.RoomID, ch *Chan
 		for attempt := 1; attempt <= nameHealMaxAttempts; attempt++ {
 			resolved, final := c.attemptRoomName(ctx, roomID, epoch)
 			if final {
-				// A room confirmed to have no name may turn out to be a DM, which is reported as well.
+				// A room confirmed to have no name may turn out to be a DM. That is reported through
+				// RoomNameHandler, so it does not depend on the optional WithRoomNameResolved callback.
 				if ctx.Err() == nil {
-					c.notifyRoomName(roomID, true)
+					c.notifyRoomName(roomID, false)
 				}
 
 				return

@@ -573,7 +573,7 @@ func (c *Client) Rooms() []RoomInfo {
 		unresolved, direct, members, last := ch.nameUnresolvedLocked(), ch.IsDirect || inferred, len(ch.Members), ch.LastActivity
 
 		if !direct {
-			ch.listedAsChannel = true
+			ch.listedAsChannel, ch.droppedAsDirect = true, false
 		}
 
 		ch.Unlock()
