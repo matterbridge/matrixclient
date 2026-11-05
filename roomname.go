@@ -329,7 +329,9 @@ func (c *Client) claimRoomName(roomID id.RoomID, names, transitions bool) (*Room
 		return ch.startDeliveryLocked(roomID, old, name), true, true
 	}
 
-	if !names || name == old || old == "" || direct {
+	// A room reported as a DM is not held by the consumer, so its renames are not reported
+	// until it is restored, which a departed room never is.
+	if !names || name == old || old == "" || direct || ch.droppedAsDirect {
 		return nil, false, false
 	}
 
