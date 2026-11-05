@@ -8,10 +8,12 @@ package e2ee
 
 import (
 	"context"
+	"fmt"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto/cryptohelper"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 
 	"github.com/matterbridge/matrixclient"
 )
@@ -58,20 +60,42 @@ func (h helper) Fingerprint() string {
 }
 
 // DeviceVerified implements matrixclient.DeviceVerifier.
-func (h helper) DeviceVerified(ctx context.Context) bool {
+func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 	m := h.Machine()
 	if m == nil {
-		return false
+		return false, nil
 	}
+
+	var (
+		dev *id.Device
+		err error
+	)
 
 	// GetOrFetchDevice would return the cached device, whose trust may predate a
-	// verification done from another client, so always refresh from the server.
-	dev, ok := m.LoadDevices(ctx, h.client.UserID)[h.client.DeviceID]
-	if !ok {
-		return false
+	// verification done from another client, so refresh from the server. FetchKeys
+	// reaches into StateStore, which is not set up until the machine is fully
+	// initialised, so use the read-only store until then.
+	if m.StateStore == nil {
+		dev, err = m.CryptoStore.GetDevice(ctx, h.client.UserID, h.client.DeviceID)
+		if err != nil {
+			return false, fmt.Errorf("get own device: %w", err)
+		}
+	} else {
+		var devices map[id.UserID]map[id.DeviceID]*id.Device
+
+		devices, err = m.FetchKeys(ctx, []id.UserID{h.client.UserID}, true)
+		if err != nil {
+			return false, fmt.Errorf("fetch own device keys: %w", err)
+		}
+
+		dev = devices[h.client.UserID][h.client.DeviceID]
 	}
 
-	return m.IsDeviceTrusted(ctx, dev)
+	if dev == nil {
+		return false, nil
+	}
+
+	return m.IsDeviceTrusted(ctx, dev), nil
 }
 
 // Factory returns the option to pass to matrixclient.New.
