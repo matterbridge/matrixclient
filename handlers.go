@@ -86,6 +86,16 @@ func (c *Client) handleDM(_ context.Context, ev *event.Event) {
 	}
 }
 
+// inferrableLocked reports whether the room has the shape of an inferred direct message: invite-only,
+// not world readable, two members, no name or aliases, all confirmed by the server. ch must be locked.
+func (ch *Channel) inferrableLocked() bool {
+	if ch.joinRule != event.JoinRuleInvite || ch.worldReadable || !ch.joinedSeen || !ch.invitedSeen || ch.joinedCount+ch.invitedCount != 2 {
+		return false
+	}
+
+	return ch.Name == "" && ch.Alias == "" && len(ch.AltAliases) == 0 && ch.nameChecked
+}
+
 // inferredDirectLocked returns the peer of a room that clients such as Element show as a
 // direct message although it is not in m.direct: it is invite-only and not world readable, so
 // nobody else can join or read what is sent as a private message, it is not a space, has two
@@ -96,7 +106,7 @@ func (c *Client) inferredDirectLocked(ch *Channel) (id.UserID, bool) {
 		return "", false
 	}
 
-	if ch.IsDirect || ch.joinRule != event.JoinRuleInvite || ch.worldReadable || len(ch.AltAliases) > 0 || !ch.joinedSeen || !ch.invitedSeen || ch.joinedCount+ch.invitedCount != 2 || ch.Name != "" || ch.Alias != "" || !ch.nameChecked {
+	if ch.IsDirect || !ch.inferrableLocked() {
 		return "", false
 	}
 
