@@ -80,6 +80,31 @@ func (c *Client) handleDM(_ context.Context, ev *event.Event) {
 	}
 }
 
+// inferredDirectLocked returns the peer of a room that clients such as Element show as a
+// direct message although it is not in m.direct: it has two members, no name and no alias
+// (confirmed by the server), and the other member is known. c must be read locked and ch locked.
+func (c *Client) inferredDirectLocked(ch *Channel) (id.UserID, bool) {
+	if ch.IsDirect || ch.memberCount != 2 || ch.Name != "" || ch.Alias != "" || !ch.nameChecked {
+		return "", false
+	}
+
+	var peer id.UserID
+
+	for userID := range ch.Members {
+		if userID == c.mc.UserID {
+			continue
+		}
+
+		if peer != "" {
+			return "", false
+		}
+
+		peer = userID
+	}
+
+	return peer, peer != ""
+}
+
 func (c *Client) handleMember(_ context.Context, ev *event.Event) {
 	member := ev.Content.AsMember()
 	if member == nil || ev.StateKey == nil {
@@ -227,6 +252,15 @@ func (c *Client) noteTimeline(res *mautrix.RespSync) {
 
 				ch.Lock()
 				ch.heroes = slices.Clone(room.Summary.Heroes)
+				ch.Unlock()
+			}
+
+			// The counts are omitted when unchanged, a partial update is not a count.
+			if room.Summary.JoinedMemberCount != nil && room.Summary.InvitedMemberCount != nil {
+				ch := c.channelLocked(roomID)
+
+				ch.Lock()
+				ch.memberCount = *room.Summary.JoinedMemberCount + *room.Summary.InvitedMemberCount
 				ch.Unlock()
 			}
 		}

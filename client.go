@@ -443,9 +443,13 @@ func (c *Client) IsDirect(roomID id.RoomID) bool {
 	c.RLock()
 	defer c.RUnlock()
 
-	_, ok := c.dmChannels[roomID]
+	if _, ok := c.dmChannels[roomID]; ok {
+		return true
+	}
 
-	return ok
+	_, inferred := c.inferredDirectRoomLocked(roomID)
+
+	return inferred
 }
 
 // DirectUsers returns the users of a direct message room.
@@ -453,7 +457,28 @@ func (c *Client) DirectUsers(roomID id.RoomID) []id.UserID {
 	c.RLock()
 	defer c.RUnlock()
 
-	return slices.Clone(c.dmChannels[roomID])
+	if users, ok := c.dmChannels[roomID]; ok {
+		return slices.Clone(users)
+	}
+
+	if peer, inferred := c.inferredDirectRoomLocked(roomID); inferred {
+		return []id.UserID{peer}
+	}
+
+	return nil
+}
+
+// inferredDirectRoomLocked is inferredDirectLocked for a room ID, c must be read locked.
+func (c *Client) inferredDirectRoomLocked(roomID id.RoomID) (id.UserID, bool) {
+	ch, ok := c.channels[roomID]
+	if !ok {
+		return "", false
+	}
+
+	ch.RLock()
+	defer ch.RUnlock()
+
+	return c.inferredDirectLocked(ch)
 }
 
 // DirectRoom returns the direct message room with userID, or "", excluding invitations and departed rooms.
@@ -471,6 +496,24 @@ func (c *Client) DirectRoom(userID id.UserID) id.RoomID {
 		}
 
 		if len(users) == 1 && users[0] == userID {
+			return roomID
+		}
+	}
+
+	for roomID := range c.channels {
+		if _, invited := c.invitations[roomID]; invited {
+			continue
+		}
+
+		if _, left := c.leftRooms[roomID]; left {
+			continue
+		}
+
+		if _, mapped := c.dmChannels[roomID]; mapped {
+			continue
+		}
+
+		if peer, inferred := c.inferredDirectRoomLocked(roomID); inferred && peer == userID {
 			return roomID
 		}
 	}
@@ -524,7 +567,8 @@ func (c *Client) Rooms() []RoomInfo {
 		display := c.displayNameLocked(roomID, ch)
 		ch.reportNameLocked(display)
 
-		unresolved, direct, members, last := ch.nameUnresolvedLocked(), ch.IsDirect, len(ch.Members), ch.LastActivity
+		_, inferred := c.inferredDirectLocked(ch)
+		unresolved, direct, members, last := ch.nameUnresolvedLocked(), ch.IsDirect || inferred, len(ch.Members), ch.LastActivity
 
 		ch.Unlock()
 
