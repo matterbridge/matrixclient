@@ -179,6 +179,17 @@ func (ch *Channel) noteSelfMembershipLocked(joined bool) bool {
 	return true
 }
 
+// noteListedLocked records that the room was handed out as a channel. While a callback is
+// being delivered the flags stay, as the callback may still drop the channel that was
+// just handed out, and the comparison after it must restore it. ch must be locked.
+func (ch *Channel) noteListedLocked(direct bool) {
+	if direct || ch.delivering {
+		return
+	}
+
+	ch.listedAsChannel, ch.droppedAsDirect = true, false
+}
+
 // reportNameLocked records display as the name the consumer holds. While a callback is
 // being delivered the baseline stays, as the callback carries an older name, and the
 // delivery loop of notifyRoomName compares again once the callback returned. ch must be locked.
@@ -227,9 +238,8 @@ func (c *Client) ResolveRoomName(ctx context.Context, roomID id.RoomID) string {
 	display := c.displayNameLocked(roomID, ch)
 	ch.reportNameLocked(display)
 
-	if _, inferred := c.inferredDirectLocked(ch); !ch.IsDirect && !inferred {
-		ch.listedAsChannel, ch.droppedAsDirect = true, false
-	}
+	_, inferred := c.inferredDirectLocked(ch)
+	ch.noteListedLocked(ch.IsDirect || inferred)
 
 	return display
 }
@@ -242,7 +252,15 @@ func (c *Client) ResolveRoomName(ctx context.Context, roomID id.RoomID) string {
 // names. No other lock is held during a callback, so it may call client methods.
 func (c *Client) notifyRoomName(roomID id.RoomID, healed bool) {
 	h, isHandler := c.handler.(RoomNameHandler)
-	if healed && c.nameResolved == nil || !healed && (!isHandler || !c.synced.Load()) {
+
+	// Drops and restores of a channel always go through RoomNameHandler, also when healed.
+	transitions := isHandler && c.synced.Load()
+	names := transitions
+	if healed {
+		names = c.nameResolved != nil
+	}
+
+	if !names && !transitions {
 		return
 	}
 
@@ -250,12 +268,12 @@ func (c *Client) notifyRoomName(roomID id.RoomID, healed bool) {
 	defer c.nameNotify.Unlock()
 
 	for {
-		rename, changed := c.claimRoomName(roomID)
+		rename, changed, transition := c.claimRoomName(roomID, names, transitions)
 		if !changed {
 			return
 		}
 
-		if healed {
+		if healed && !transition {
 			c.nameResolved(roomID, rename.Name)
 		} else {
 			h.OnRoomName(rename)
@@ -267,15 +285,23 @@ func (c *Client) notifyRoomName(roomID id.RoomID, healed bool) {
 	}
 }
 
+// departedLocked reports whether roomID is an invitation or a room we left, which Rooms excludes. c must be read locked.
+func (c *Client) departedLocked(roomID id.RoomID) bool {
+	_, invited := c.invitations[roomID]
+	_, left := c.leftRooms[roomID]
+
+	return invited || left
+}
+
 // claimRoomName moves the reported name of a room to its current name and marks the
 // delivery of the callback as running, see reportNameLocked.
-func (c *Client) claimRoomName(roomID id.RoomID) (*RoomRename, bool) {
+func (c *Client) claimRoomName(roomID id.RoomID, names, transitions bool) (*RoomRename, bool, bool) {
 	c.RLock()
 	defer c.RUnlock()
 
 	ch, ok := c.channels[roomID]
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
 
 	ch.Lock()
@@ -288,34 +314,34 @@ func (c *Client) claimRoomName(roomID id.RoomID) (*RoomRename, bool) {
 
 	// A room handed out as a channel that turned into a DM is reported once, whatever its name,
 	// so the consumer can drop the channel. Later changes of a DM name are not reported.
-	if (ch.IsDirect || inferred) && ch.listedAsChannel {
+	if transitions && (ch.IsDirect || inferred) && ch.listedAsChannel {
 		ch.listedAsChannel, ch.droppedAsDirect = false, true
 		ch.reportedName = name
 		ch.delivering = true
 		ch.renameAgain = false
 
-		return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true
+		return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true, true
 	}
 
 	// The reverse transition: a room reported as a DM is a channel again, so the consumer restores it.
-	if !ch.IsDirect && !inferred && ch.droppedAsDirect {
-		ch.listedAsChannel, ch.droppedAsDirect = true, false
+	if transitions && !ch.IsDirect && !inferred && ch.droppedAsDirect && !c.departedLocked(roomID) {
+		ch.listedAsChannel, ch.droppedAsDirect = true, true
 		ch.reportedName = name
 		ch.delivering = true
 		ch.renameAgain = false
 
-		return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true
+		return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true, false
 	}
 
-	if name == old || old == "" || ch.IsDirect || inferred {
-		return nil, false
+	if !names || name == old || old == "" || ch.IsDirect || inferred {
+		return nil, false, false
 	}
 
 	ch.reportedName = name
 	ch.delivering = true
 	ch.renameAgain = false
 
-	return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true
+	return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}, true, false
 }
 
 // finishRoomName ends the delivery of a callback and reports whether the room

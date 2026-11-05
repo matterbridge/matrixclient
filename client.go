@@ -572,9 +572,7 @@ func (c *Client) Rooms() []RoomInfo {
 		_, inferred := c.inferredDirectLocked(ch)
 		unresolved, direct, members, last := ch.nameUnresolvedLocked(), ch.IsDirect || inferred, len(ch.Members), ch.LastActivity
 
-		if !direct {
-			ch.listedAsChannel, ch.droppedAsDirect = true, false
-		}
+		ch.noteListedLocked(direct)
 
 		ch.Unlock()
 
