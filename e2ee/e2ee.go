@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/crypto"
 	"maunium.net/go/mautrix/crypto/cryptohelper"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
@@ -59,6 +60,40 @@ func (h helper) Fingerprint() string {
 	return m.Fingerprint()
 }
 
+// ownDevice returns our device, refreshed from the server when possible.
+func (h helper) ownDevice(ctx context.Context, m *crypto.OlmMachine) (*id.Device, error) {
+	// GetOrFetchDevice would return the cached device, whose trust may predate a
+	// verification done from another client, so refresh from the server. FetchKeys
+	// reaches into StateStore, which is not set up until the machine is fully
+	// initialized, so use the read-only store until then.
+	if m.StateStore == nil {
+		dev, err := m.CryptoStore.GetDevice(ctx, h.client.UserID, h.client.DeviceID)
+		if err != nil {
+			return nil, fmt.Errorf("get own device: %w", err)
+		}
+
+		if dev == nil {
+			return nil, fmt.Errorf("own device %s not in crypto store", h.client.DeviceID)
+		}
+
+		return dev, nil
+	}
+
+	devices, err := m.FetchKeys(ctx, []id.UserID{h.client.UserID}, true)
+	if err != nil {
+		return nil, fmt.Errorf("fetch own device keys: %w", err)
+	}
+
+	// FetchKeys omits the user or device without an error when the server
+	// query or validation of the device failed.
+	dev := devices[h.client.UserID][h.client.DeviceID]
+	if dev == nil {
+		return nil, fmt.Errorf("server did not return own device %s", h.client.DeviceID)
+	}
+
+	return dev, nil
+}
+
 // DeviceVerified implements matrixclient.DeviceVerifier.
 func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 	m := h.Machine()
@@ -66,38 +101,9 @@ func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	var (
-		dev *id.Device
-		err error
-	)
-
-	// GetOrFetchDevice would return the cached device, whose trust may predate a
-	// verification done from another client, so refresh from the server. FetchKeys
-	// reaches into StateStore, which is not set up until the machine is fully
-	// initialized, so use the read-only store until then.
-	if m.StateStore == nil {
-		dev, err = m.CryptoStore.GetDevice(ctx, h.client.UserID, h.client.DeviceID)
-		if err != nil {
-			return false, fmt.Errorf("get own device: %w", err)
-		}
-
-		if dev == nil {
-			return false, fmt.Errorf("own device %s not in crypto store", h.client.DeviceID)
-		}
-	} else {
-		var devices map[id.UserID]map[id.DeviceID]*id.Device
-
-		devices, err = m.FetchKeys(ctx, []id.UserID{h.client.UserID}, true)
-		if err != nil {
-			return false, fmt.Errorf("fetch own device keys: %w", err)
-		}
-
-		// FetchKeys omits the user or device without an error when the server
-		// query or validation of the device failed.
-		dev = devices[h.client.UserID][h.client.DeviceID]
-		if dev == nil {
-			return false, fmt.Errorf("server did not return own device %s", h.client.DeviceID)
-		}
+	dev, err := h.ownDevice(ctx, m)
+	if err != nil {
+		return false, err
 	}
 
 	trust, err := m.ResolveTrustContext(ctx, dev)
