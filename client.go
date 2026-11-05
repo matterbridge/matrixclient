@@ -578,7 +578,7 @@ func (c *Client) Rooms() []RoomInfo {
 		}
 
 		// DM associations carry no members, so a direct room may not have any cached yet.
-		if direct && members <= 1 {
+		if inferred || direct && members <= 1 {
 			continue
 		}
 
