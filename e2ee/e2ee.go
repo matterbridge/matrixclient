@@ -64,8 +64,10 @@ func (h helper) DeviceVerified(ctx context.Context) bool {
 		return false
 	}
 
-	dev, err := m.GetOrFetchDevice(ctx, h.client.UserID, h.client.DeviceID)
-	if err != nil {
+	// GetOrFetchDevice would return the cached device, whose trust may predate a
+	// verification done from another client, so always refresh from the server.
+	dev, ok := m.LoadDevices(ctx, h.client.UserID)[h.client.DeviceID]
+	if !ok {
 		return false
 	}
 
