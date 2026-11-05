@@ -63,6 +63,8 @@ type Channel struct {
 	joinRule event.JoinRule // from the join_rules state, "" until seen
 	// worldReadable is set by the history_visibility state, anyone can read such a room without joining.
 	worldReadable bool
+	// listedAsChannel is set once the room was handed out as a channel, so a later turn into a DM is reported.
+	listedAsChannel bool
 
 	heroes       []id.UserID // members the server suggests to name the room after, from the sync summary
 	reportedName string      // channel name last reported to the consumer, see RoomNameHandler
@@ -219,7 +221,9 @@ type InviteHandler interface {
 // Like matterircd's ChannelUpdateEvent for Mattermost it carries the room ID, the
 // new channel name and the display name. A consumer is expected to handle it the
 // same way: PART the channel of OldName with "Channel renamed to <Name>", JOIN
-// Name and send a server notice. Direct rooms are never reported.
+// Name and send a server notice. Direct rooms are never reported, except once when a
+// room that was handed out as a channel turns into one: the consumer is expected to
+// drop the channel, Client.IsDirect is true by then.
 type RoomRename struct {
 	RoomID      id.RoomID
 	OldName     string

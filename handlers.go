@@ -90,7 +90,7 @@ func (c *Client) inferredDirectLocked(ch *Channel) (id.UserID, bool) {
 		return "", false
 	}
 
-	if ch.IsDirect || ch.joinRule != event.JoinRuleInvite || ch.worldReadable || !ch.joinedSeen || !ch.invitedSeen || ch.joinedCount+ch.invitedCount != 2 || ch.Name != "" || ch.Alias != "" || !ch.nameChecked {
+	if ch.IsDirect || ch.joinRule != event.JoinRuleInvite || ch.worldReadable || len(ch.AltAliases) > 0 || !ch.joinedSeen || !ch.invitedSeen || ch.joinedCount+ch.invitedCount != 2 || ch.Name != "" || ch.Alias != "" || !ch.nameChecked {
 		return "", false
 	}
 
