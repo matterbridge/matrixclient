@@ -115,7 +115,8 @@ func (c *Client) recordDirect(ctx context.Context, userID id.UserID, roomID id.R
 	merged := make(map[id.RoomID]id.UserID, len(c.pendingDirect))
 
 	for pendingRoom, pendingUser := range c.pendingDirect {
-		if _, left := c.leftRooms[pendingRoom]; left {
+		// The room being recorded was just joined or created, so its marker may be stale until the next sync.
+		if _, left := c.leftRooms[pendingRoom]; left && pendingRoom != roomID {
 			delete(c.pendingDirect, pendingRoom)
 
 			continue
