@@ -111,6 +111,15 @@ func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("resolve own device trust: %w", err)
 	}
 
+	// ResolveTrustContext discards IsUserTrusted errors and falls back to TOFU or
+	// untrusted, so surface them rather than report a definitive state.
+	if trust == id.TrustStateCrossSignedTOFU || trust == id.TrustStateCrossSignedUntrusted {
+		_, err = m.IsUserTrusted(ctx, h.client.UserID)
+		if err != nil {
+			return false, fmt.Errorf("check own user trust: %w", err)
+		}
+	}
+
 	switch trust {
 	case id.TrustStateVerified, id.TrustStateCrossSignedTOFU, id.TrustStateCrossSignedVerified:
 		return true, nil
