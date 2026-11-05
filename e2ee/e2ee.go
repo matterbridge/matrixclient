@@ -62,7 +62,7 @@ func (h helper) Fingerprint() string {
 
 // ownDevice returns our device from the local crypto store. It deliberately
 // avoids FetchKeys, which writes device and cross-signing data without
-// synchronising with the machine's own sync handling.
+// synchronizing with the machine's own sync handling.
 func (h helper) ownDevice(ctx context.Context, m *crypto.OlmMachine) (*id.Device, error) {
 	dev, err := m.CryptoStore.GetDevice(ctx, h.client.UserID, h.client.DeviceID)
 	if err != nil {
