@@ -27,8 +27,10 @@ failed requests keep the invitation pending. Successful joins, rejections and
 revocations remove it from `Invitations()` when synced. An IRC bridge can render
 `OnInvite` as an IRC `INVITE` and use `/join` to call `Join` with the room ID.
 Accepted direct invitations retain their DM classification across `m.direct`
-updates. Rooms observed leaving are excluded from the direct-room cache until
-they are joined again, even if stale `m.direct` data still lists them.
+updates. Rooms observed leaving are excluded from `DirectRoom()` and `Rooms()`
+until they are joined again, even if stale `m.direct` data still lists them.
+Their DM classification is retained for final or late-decrypted incoming events
+and reused when rejoining without a new invitation or `m.direct` update.
 
 ## Encrypted rooms
 

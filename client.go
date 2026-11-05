@@ -57,7 +57,7 @@ type Client struct {
 	invitations map[id.RoomID]Invitation
 	// Accepted direct invites may not appear in m.direct, even after joining.
 	acceptedDirect map[id.RoomID]id.UserID
-	leftRooms      map[id.RoomID]struct{} // stale m.direct entries must not restore departed rooms
+	leftRooms      map[id.RoomID]struct{} // excludes departed rooms from selection, not DM classification
 
 	crypto Crypto
 
@@ -414,13 +414,17 @@ func (c *Client) DirectUsers(roomID id.RoomID) []id.UserID {
 	return slices.Clone(c.dmChannels[roomID])
 }
 
-// DirectRoom returns the direct message room with userID, or "", excluding pending invitations.
+// DirectRoom returns the direct message room with userID, or "", excluding invitations and departed rooms.
 func (c *Client) DirectRoom(userID id.UserID) id.RoomID {
 	c.RLock()
 	defer c.RUnlock()
 
 	for roomID, users := range c.dmChannels {
 		if _, invited := c.invitations[roomID]; invited {
+			continue
+		}
+
+		if _, left := c.leftRooms[roomID]; left {
 			continue
 		}
 
@@ -457,7 +461,7 @@ type RoomInfo struct {
 	LastActivity int64 // timestamp in milliseconds of the newest message seen, 0 if none
 }
 
-// Rooms returns a snapshot of the known rooms (excluding invitations and 1:1 direct rooms).
+// Rooms returns a snapshot of the known rooms (excluding invitations, departed rooms and 1:1 direct rooms).
 func (c *Client) Rooms() []RoomInfo {
 	c.RLock()
 	defer c.RUnlock()
@@ -466,6 +470,10 @@ func (c *Client) Rooms() []RoomInfo {
 
 	for roomID, ch := range c.channels {
 		if _, invited := c.invitations[roomID]; invited {
+			continue
+		}
+
+		if _, left := c.leftRooms[roomID]; left {
 			continue
 		}
 
