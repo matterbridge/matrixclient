@@ -74,7 +74,7 @@ func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 	// GetOrFetchDevice would return the cached device, whose trust may predate a
 	// verification done from another client, so refresh from the server. FetchKeys
 	// reaches into StateStore, which is not set up until the machine is fully
-	// initialised, so use the read-only store until then.
+	// initialized, so use the read-only store until then.
 	if m.StateStore == nil {
 		dev, err = m.CryptoStore.GetDevice(ctx, h.client.UserID, h.client.DeviceID)
 		if err != nil {
