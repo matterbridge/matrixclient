@@ -236,10 +236,15 @@ func (c *Client) ResolveRoomName(ctx context.Context, roomID id.RoomID) string {
 	defer ch.Unlock()
 
 	display := c.displayNameLocked(roomID, ch)
-	ch.reportNameLocked(display)
-
 	_, inferred := c.inferredDirectLocked(ch)
-	ch.noteListedLocked(ch.IsDirect || inferred)
+	direct := ch.IsDirect || inferred
+
+	// The name of a DM is not a channel name, the baseline stays what the consumer holds.
+	if !direct {
+		ch.reportNameLocked(display)
+	}
+
+	ch.noteListedLocked(direct)
 
 	return display
 }

@@ -225,8 +225,8 @@ type InviteHandler interface {
 // same way: PART the channel of OldName with "Channel renamed to <Name>", JOIN
 // Name and send a server notice. Direct rooms are never reported, except once when a
 // room that was handed out as a channel turns into one: the consumer is expected to
-// drop the channel, Client.IsDirect is true by then. Turning back into a channel is reported once
-// as well.
+// drop the channel of OldName, Client.IsDirect is true by then. Turning back into a channel is
+// reported once as well, JOIN Name then, OldName is not a channel the consumer holds.
 type RoomRename struct {
 	RoomID      id.RoomID
 	OldName     string
