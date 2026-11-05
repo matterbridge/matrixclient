@@ -92,8 +92,20 @@ func (c *Client) persistAcceptedDirect(ctx context.Context, roomID id.RoomID) {
 		c.acceptedDirect[roomID] = userID
 	}
 
-	direct := maps.Clone(c.directData)
 	c.Unlock()
+
+	c.recordDirect(ctx, userID, roomID)
+}
+
+// recordDirect adds roomID to the m.direct entry of userID. The homeserver does not
+// set m.direct, so it is persisted here to survive a restart.
+func (c *Client) recordDirect(ctx context.Context, userID id.UserID, roomID id.RoomID) {
+	c.directWriteMu.Lock()
+	defer c.directWriteMu.Unlock()
+
+	c.RLock()
+	direct := maps.Clone(c.directData)
+	c.RUnlock()
 
 	if slices.Contains(direct[userID], roomID) {
 		return
@@ -108,8 +120,6 @@ func (c *Client) persistAcceptedDirect(ctx context.Context, roomID id.RoomID) {
 	err := c.mc.SetAccountData(ctx, event.AccountDataDirectChats.Type, direct)
 	if err != nil {
 		c.logger.Errorf("failed to persist m.direct for %s: %s", roomID, err)
-
-		return
 	}
 
 	c.Lock()

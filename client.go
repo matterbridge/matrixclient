@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"maps"
 	"math/big"
 	"slices"
 	"strings"
@@ -58,6 +57,10 @@ type Client struct {
 	// Accepted direct invites may not appear in m.direct, even after joining.
 	acceptedDirect map[id.RoomID]id.UserID
 	leftRooms      map[id.RoomID]struct{} // excludes departed rooms from selection, not DM classification
+
+	// directWriteMu serializes the m.direct snapshot, write and cache update, as each write
+	// replaces the whole account data. It is never held with the client lock over network I/O.
+	directWriteMu sync.Mutex
 
 	crypto Crypto
 
@@ -605,24 +608,9 @@ func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.E
 
 		roomID = resp.RoomID
 
-		c.Lock()
-		direct := maps.Clone(c.directData)
-		c.Unlock()
-
-		if direct == nil {
-			direct = make(map[id.UserID][]id.RoomID)
-		}
-
-		direct[userID] = append(slices.Clone(direct[userID]), roomID)
-
-		// m.direct is not set by the homeserver, persist it ourselves.
-		err = c.mc.SetAccountData(ctx, event.AccountDataDirectChats.Type, direct)
-		if err != nil {
-			c.logger.Errorf("failed to persist m.direct for %s: %s", roomID, err)
-		}
+		c.recordDirect(ctx, userID, roomID)
 
 		c.Lock()
-		c.directData[userID] = direct[userID]
 		c.addDirectLocked(roomID, userID)
 		c.Unlock()
 	}
