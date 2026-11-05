@@ -84,7 +84,7 @@ func (c *Client) handleDM(_ context.Context, ev *event.Event) {
 // direct message although it is not in m.direct: it has two members, no name and no alias
 // (confirmed by the server), and the other member is known. c must be read locked and ch locked.
 func (c *Client) inferredDirectLocked(ch *Channel) (id.UserID, bool) {
-	if ch.IsDirect || ch.memberCount != 2 || ch.Name != "" || ch.Alias != "" || !ch.nameChecked {
+	if ch.IsDirect || !ch.joinedSeen || !ch.invitedSeen || ch.joinedCount+ch.invitedCount != 2 || ch.Name != "" || ch.Alias != "" || !ch.nameChecked {
 		return "", false
 	}
 
@@ -255,12 +255,19 @@ func (c *Client) noteTimeline(res *mautrix.RespSync) {
 				ch.Unlock()
 			}
 
-			// The counts are omitted when unchanged, a partial update is not a count.
-			if room.Summary.JoinedMemberCount != nil && room.Summary.InvitedMemberCount != nil {
+			if room.Summary.JoinedMemberCount != nil || room.Summary.InvitedMemberCount != nil {
 				ch := c.channelLocked(roomID)
 
 				ch.Lock()
-				ch.memberCount = *room.Summary.JoinedMemberCount + *room.Summary.InvitedMemberCount
+
+				if n := room.Summary.JoinedMemberCount; n != nil {
+					ch.joinedCount, ch.joinedSeen = *n, true
+				}
+
+				if n := room.Summary.InvitedMemberCount; n != nil {
+					ch.invitedCount, ch.invitedSeen = *n, true
+				}
+
 				ch.Unlock()
 			}
 		}

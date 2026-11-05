@@ -56,7 +56,10 @@ type Channel struct {
 	// so a lookup does not restore a value a newer sync event removed.
 	nameRev, aliasRev uint64
 
-	memberCount  int         // joined and invited members from the sync summary, 0 if unknown
+	// joined and invited member counts from the sync summary, which omits each when unchanged
+	joinedCount, invitedCount int
+	joinedSeen, invitedSeen   bool
+
 	heroes       []id.UserID // members the server suggests to name the room after, from the sync summary
 	reportedName string      // channel name last reported to the consumer, see RoomNameHandler
 	delivering   bool        // a name callback is running, see reportNameLocked
