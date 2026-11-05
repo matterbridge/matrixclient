@@ -183,7 +183,14 @@ func (ch *Channel) noteSelfMembershipLocked(joined bool) bool {
 // being delivered the flags stay, as the callback may still drop the channel that was
 // just handed out, and the comparison after it must restore it. ch must be locked.
 func (ch *Channel) noteListedLocked(direct bool) {
-	if direct || ch.delivering {
+	if ch.delivering {
+		// A DM confirmed during delivery skipped reportNameLocked, the loop still has to compare again.
+		ch.renameAgain = true
+
+		return
+	}
+
+	if direct {
 		return
 	}
 
