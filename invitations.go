@@ -120,6 +120,9 @@ func (c *Client) recordDirect(ctx context.Context, userID id.UserID, roomID id.R
 	err := c.mc.SetAccountData(ctx, event.AccountDataDirectChats.Type, direct)
 	if err != nil {
 		c.logger.Errorf("failed to persist m.direct for %s: %s", roomID, err)
+
+		// Not cached, so a later call retries the write.
+		return
 	}
 
 	c.Lock()
