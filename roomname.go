@@ -574,7 +574,7 @@ func (c *Client) RefreshRoomName(ctx context.Context, roomID id.RoomID) error {
 		ch.setNameLocked(name.Name)
 	}
 
-	if ch.Alias == "" && alias.Alias != "" && ch.aliasRev == aliasRev {
+	if ch.Alias == "" && (alias.Alias != "" || len(alias.AltAliases) > 0) && ch.aliasRev == aliasRev {
 		ch.Alias, ch.AltAliases = alias.Alias, alias.AltAliases
 	}
 

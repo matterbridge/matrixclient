@@ -51,6 +51,8 @@ func (c *Client) handleDM(_ context.Context, ev *event.Event) {
 			ch.IsDirect = false
 			ch.Unlock()
 		}
+
+		c.nameDirty[roomID] = struct{}{}
 	}
 
 	c.dmChannels = make(map[id.RoomID][]id.UserID)
@@ -77,6 +79,10 @@ func (c *Client) handleDM(_ context.Context, ev *event.Event) {
 		}
 
 		c.addDirectLocked(roomID, p.user)
+	}
+
+	for roomID := range c.dmChannels {
+		c.nameDirty[roomID] = struct{}{}
 	}
 }
 
