@@ -108,7 +108,19 @@ func (h helper) Init(ctx context.Context) error {
 		return fmt.Errorf("fetch own keys: %w", err)
 	}
 
-	return nil
+	// FetchKeys logs per-server and storage failures without returning them.
+	tracked, err = m.CryptoStore.FilterTrackedUsers(ctx, []id.UserID{h.client.UserID})
+	if err != nil {
+		return fmt.Errorf("check own user tracking: %w", err)
+	}
+
+	if len(tracked) == 0 {
+		return fmt.Errorf("own user %s not tracked after fetching keys", h.client.UserID)
+	}
+
+	_, err = h.ownDevice(ctx, m)
+
+	return err
 }
 
 // DeviceVerified implements matrixclient.DeviceVerifier. It resolves trust from
