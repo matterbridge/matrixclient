@@ -331,14 +331,14 @@ func (c *Client) claimRoomName(roomID id.RoomID, names, transitions bool) (*Room
 	if transitions && direct && ch.listedAsChannel {
 		ch.listedAsChannel, ch.droppedAsDirect = false, true
 
-		return ch.startDeliveryLocked(roomID, old, name), true, true
+		return ch.startDeliveryLocked(roomID, old, name, RoomDropped), true, true
 	}
 
 	// The reverse transition: a room reported as a DM is a channel again, so the consumer restores it.
 	if transitions && !direct && ch.droppedAsDirect && !c.departedLocked(roomID) {
 		ch.listedAsChannel, ch.droppedAsDirect = true, false
 
-		return ch.startDeliveryLocked(roomID, old, name), true, true
+		return ch.startDeliveryLocked(roomID, old, name, RoomRestored), true, true
 	}
 
 	// A room reported as a DM is not held by the consumer, so its renames are not reported
@@ -347,17 +347,17 @@ func (c *Client) claimRoomName(roomID id.RoomID, names, transitions bool) (*Room
 		return nil, false, false
 	}
 
-	return ch.startDeliveryLocked(roomID, old, name), true, false
+	return ch.startDeliveryLocked(roomID, old, name, RoomRenamed), true, false
 }
 
 // startDeliveryLocked moves the reported name to name and marks the delivery of a callback
 // as running. ch must be locked.
-func (ch *Channel) startDeliveryLocked(roomID id.RoomID, old, name string) *RoomRename {
+func (ch *Channel) startDeliveryLocked(roomID id.RoomID, old, name string, kind RoomRenameKind) *RoomRename {
 	ch.reportedName = name
 	ch.delivering = true
 	ch.renameAgain = false
 
-	return &RoomRename{RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}
+	return &RoomRename{Kind: kind, RoomID: roomID, OldName: old, Name: name, DisplayName: ch.RawName}
 }
 
 // finishRoomName ends the delivery of a callback and reports whether the room
