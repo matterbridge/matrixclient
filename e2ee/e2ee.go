@@ -88,7 +88,12 @@ func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 			return false, fmt.Errorf("fetch own device keys: %w", err)
 		}
 
+		// FetchKeys omits the user or device without an error when the server
+		// query or validation of the device failed.
 		dev = devices[h.client.UserID][h.client.DeviceID]
+		if dev == nil {
+			return false, fmt.Errorf("server did not return own device %s", h.client.DeviceID)
+		}
 	}
 
 	if dev == nil {
