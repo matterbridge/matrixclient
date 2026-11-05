@@ -213,7 +213,8 @@ func (c *Client) ResolveRoomName(ctx context.Context, roomID id.RoomID) string {
 		err := c.RefreshRoomName(ctx, roomID)
 		if err != nil {
 			c.logger.Debugf("resolving name of %s: %s", roomID, err)
-			c.healRoomName(c.ctx, roomID, ch)
+			// The healer outlives the short deadline of the caller, so it follows the client instead.
+			c.healRoomName(c.ctx, roomID, ch) //nolint:contextcheck
 		}
 	}
 
