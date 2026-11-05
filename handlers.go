@@ -69,14 +69,14 @@ func (c *Client) handleDM(_ context.Context, ev *event.Event) {
 	}
 
 	// Associations not persisted yet are not in the snapshot, but still hold locally.
-	for roomID, userID := range c.pendingDirect {
-		if slices.Contains(c.directData[userID], roomID) {
+	for roomID, p := range c.pendingDirect {
+		if slices.Contains(c.directData[p.user], roomID) {
 			delete(c.pendingDirect, roomID)
 
 			continue
 		}
 
-		c.addDirectLocked(roomID, userID)
+		c.addDirectLocked(roomID, p.user)
 	}
 }
 

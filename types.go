@@ -75,6 +75,12 @@ type pendingSeq struct {
 	at  time.Time
 }
 
+// pendingAssoc is a direct room association not yet seen in a synced m.direct.
+type pendingAssoc struct {
+	user    id.UserID
+	written bool // the write succeeded, it stays pending until a sync confirms it
+}
+
 // Message is an incoming room or direct message. Messages sent by ourselves
 // from other sessions are delivered too, compare Sender with Client.UserID.
 type Message struct {

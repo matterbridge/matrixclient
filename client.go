@@ -56,8 +56,8 @@ type Client struct {
 	invitations map[id.RoomID]Invitation
 	// Accepted direct invites may not appear in m.direct, even after joining.
 	acceptedDirect map[id.RoomID]id.UserID
-	pendingDirect  map[id.RoomID]id.UserID // associations whose m.direct write failed, see recordDirect
-	leftRooms      map[id.RoomID]struct{}  // excludes departed rooms from selection, not DM classification
+	pendingDirect  map[id.RoomID]pendingAssoc // associations not yet seen in m.direct, see recordDirect
+	leftRooms      map[id.RoomID]struct{}     // excludes departed rooms from selection, not DM classification
 
 	// directWriteMu serializes the m.direct snapshot, write and cache update, as each write
 	// replaces the whole account data. It is never held with the client lock over network I/O.
@@ -117,7 +117,7 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 
 		invitations:    make(map[id.RoomID]Invitation),
 		acceptedDirect: make(map[id.RoomID]id.UserID),
-		pendingDirect:  make(map[id.RoomID]id.UserID),
+		pendingDirect:  make(map[id.RoomID]pendingAssoc),
 		leftRooms:      make(map[id.RoomID]struct{}),
 
 		nameResolved: o.nameResolved,

@@ -98,23 +98,25 @@ func (c *Client) persistAcceptedDirect(ctx context.Context, roomID id.RoomID) {
 }
 
 // recordDirect persists roomID as a direct room of userID. The homeserver does not set
-// m.direct, so it is written here to survive a restart. An association whose write fails
-// stays pending and is merged into later writes, as each write replaces the whole value.
+// m.direct, so it is written here to survive a restart. As each write replaces the whole
+// value, every pending association is merged into it. An association stays pending until
+// handleDM observes it in a synced snapshot, so a delayed older snapshot cannot make a
+// later write erase it, and a failed write is retried by later calls.
 func (c *Client) recordDirect(ctx context.Context, userID id.UserID, roomID id.RoomID) {
 	c.directWriteMu.Lock()
 	defer c.directWriteMu.Unlock()
 
 	c.Lock()
-	c.pendingDirect[roomID] = userID
+	c.pendingDirect[roomID] = pendingAssoc{user: userID}
 	direct := maps.Clone(c.directData)
 
 	if direct == nil {
 		direct = make(map[id.UserID][]id.RoomID)
 	}
 
-	merged := make(map[id.RoomID]id.UserID, len(c.pendingDirect))
+	unwritten := make([]id.RoomID, 0, len(c.pendingDirect))
 
-	for pendingRoom, pendingUser := range c.pendingDirect {
+	for pendingRoom, p := range c.pendingDirect {
 		// The room being recorded was just joined or created, so its marker may be stale until the next sync.
 		if _, left := c.leftRooms[pendingRoom]; left && pendingRoom != roomID {
 			delete(c.pendingDirect, pendingRoom)
@@ -122,18 +124,21 @@ func (c *Client) recordDirect(ctx context.Context, userID id.UserID, roomID id.R
 			continue
 		}
 
-		if slices.Contains(direct[pendingUser], pendingRoom) {
+		if slices.Contains(direct[p.user], pendingRoom) {
 			delete(c.pendingDirect, pendingRoom)
 
 			continue
 		}
 
-		direct[pendingUser] = append(slices.Clone(direct[pendingUser]), pendingRoom)
-		merged[pendingRoom] = pendingUser
+		direct[p.user] = append(slices.Clone(direct[p.user]), pendingRoom)
+
+		if !p.written {
+			unwritten = append(unwritten, pendingRoom)
+		}
 	}
 	c.Unlock()
 
-	if len(merged) == 0 {
+	if len(unwritten) == 0 {
 		return
 	}
 
@@ -145,10 +150,11 @@ func (c *Client) recordDirect(ctx context.Context, userID id.UserID, roomID id.R
 	}
 
 	c.Lock()
-	for pendingRoom, pendingUser := range merged {
-		delete(c.pendingDirect, pendingRoom)
-
-		c.directData[pendingUser] = direct[pendingUser]
+	for _, pendingRoom := range unwritten {
+		if p, ok := c.pendingDirect[pendingRoom]; ok {
+			p.written = true
+			c.pendingDirect[pendingRoom] = p
+		}
 	}
 	c.Unlock()
 }
@@ -156,11 +162,11 @@ func (c *Client) recordDirect(ctx context.Context, userID id.UserID, roomID id.R
 // retryDirect retries a failed m.direct write for roomID, if there is one.
 func (c *Client) retryDirect(ctx context.Context, roomID id.RoomID) {
 	c.RLock()
-	userID, ok := c.pendingDirect[roomID]
+	p, ok := c.pendingDirect[roomID]
 	c.RUnlock()
 
-	if ok {
-		c.recordDirect(ctx, userID, roomID)
+	if ok && !p.written {
+		c.recordDirect(ctx, p.user, roomID)
 	}
 }
 
