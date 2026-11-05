@@ -491,7 +491,8 @@ func (c *Client) Rooms() []RoomInfo {
 			c.healRoomName(c.ctx, roomID, ch)
 		}
 
-		if direct && members == 1 {
+		// DM associations carry no members, so a direct room may not have any cached yet.
+		if direct && members <= 1 {
 			continue
 		}
 
