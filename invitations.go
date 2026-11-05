@@ -31,7 +31,26 @@ func (c *Client) syncInvitations(_ context.Context, res *mautrix.RespSync, _ str
 	c.Lock()
 
 	for roomID := range res.Rooms.Join {
+		delete(c.leftRooms, roomID)
+
+		if invite, ok := c.invitations[roomID]; ok && invite.Direct {
+			c.acceptedDirect[roomID] = invite.Sender
+			c.addDirectLocked(roomID, invite.Sender, nil)
+		}
+
 		delete(c.invitations, roomID)
+	}
+
+	for roomID := range res.Rooms.Leave {
+		c.leftRooms[roomID] = struct{}{}
+		delete(c.acceptedDirect, roomID)
+		delete(c.dmChannels, roomID)
+
+		if ch, ok := c.channels[roomID]; ok {
+			ch.Lock()
+			ch.IsDirect = false
+			ch.Unlock()
+		}
 	}
 
 	c.Unlock()

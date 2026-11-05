@@ -55,6 +55,9 @@ type Client struct {
 	spaces     map[id.RoomID]*space
 
 	invitations map[id.RoomID]Invitation
+	// Accepted direct invites may not appear in m.direct, even after joining.
+	acceptedDirect map[id.RoomID]id.UserID
+	leftRooms      map[id.RoomID]struct{} // stale m.direct entries must not restore departed rooms
 
 	crypto Crypto
 
@@ -108,7 +111,9 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 		presence:   make(map[id.UserID]*Presence),
 		spaces:     make(map[id.RoomID]*space),
 
-		invitations: make(map[id.RoomID]Invitation),
+		invitations:    make(map[id.RoomID]Invitation),
+		acceptedDirect: make(map[id.RoomID]id.UserID),
+		leftRooms:      make(map[id.RoomID]struct{}),
 
 		nameResolved: o.nameResolved,
 		nameLookups:  make(chan struct{}, maxNameLookups),

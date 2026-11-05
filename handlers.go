@@ -24,6 +24,10 @@ func (c *Client) channelLocked(roomID id.RoomID) *Channel {
 // addDirectLocked marks roomID as direct with userID. A nil member keeps any
 // cached profile of the user.
 func (c *Client) addDirectLocked(roomID id.RoomID, userID id.UserID, member *event.MemberEventContent) {
+	if _, left := c.leftRooms[roomID]; left {
+		return
+	}
+
 	u, ok := c.users[userID]
 	if !ok {
 		u = &User{ID: userID}
@@ -73,6 +77,10 @@ func (c *Client) handleDM(_ context.Context, ev *event.Event) {
 		for _, roomID := range rooms {
 			c.addDirectLocked(roomID, userID, nil)
 		}
+	}
+
+	for roomID, userID := range c.acceptedDirect {
+		c.addDirectLocked(roomID, userID, nil)
 	}
 }
 

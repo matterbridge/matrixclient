@@ -26,6 +26,9 @@ Reject with `Leave(ctx, invite.RoomID)`. Surface request errors to the user;
 failed requests keep the invitation pending. Successful joins, rejections and
 revocations remove it from `Invitations()` when synced. An IRC bridge can render
 `OnInvite` as an IRC `INVITE` and use `/join` to call `Join` with the room ID.
+Accepted direct invitations retain their DM classification across `m.direct`
+updates. Rooms observed leaving are excluded from the direct-room cache until
+they are joined again, even if stale `m.direct` data still lists them.
 
 ## Encrypted rooms
 
