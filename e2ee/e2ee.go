@@ -95,7 +95,17 @@ func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	return m.IsDeviceTrusted(ctx, dev), nil
+	trust, err := m.ResolveTrustContext(ctx, dev)
+	if err != nil {
+		return false, fmt.Errorf("resolve own device trust: %w", err)
+	}
+
+	switch trust {
+	case id.TrustStateVerified, id.TrustStateCrossSignedTOFU, id.TrustStateCrossSignedVerified:
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 // Factory returns the option to pass to matrixclient.New.
