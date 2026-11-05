@@ -80,6 +80,10 @@ func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("get own device: %w", err)
 		}
+
+		if dev == nil {
+			return false, fmt.Errorf("own device %s not in crypto store", h.client.DeviceID)
+		}
 	} else {
 		var devices map[id.UserID]map[id.DeviceID]*id.Device
 
@@ -94,10 +98,6 @@ func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 		if dev == nil {
 			return false, fmt.Errorf("server did not return own device %s", h.client.DeviceID)
 		}
-	}
-
-	if dev == nil {
-		return false, nil
 	}
 
 	trust, err := m.ResolveTrustContext(ctx, dev)
