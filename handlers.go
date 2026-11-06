@@ -134,7 +134,7 @@ func (c *Client) memberInFlight(roomID id.RoomID) bool {
 	ch, ok := c.channels[roomID]
 	c.RUnlock()
 
-	return ok && c.creatingDirectRoom(roomID, ch)
+	return ok && c.creatingDirectRoom(ch)
 }
 
 func (c *Client) handleMember(_ context.Context, ev *event.Event) {

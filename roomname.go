@@ -239,7 +239,7 @@ func (c *Client) ResolveRoomName(ctx context.Context, roomID id.RoomID) string {
 		return ""
 	}
 
-	if c.creatingDirectRoom(roomID, ch) {
+	if c.creatingDirectRoom(ch) {
 		c.RLock()
 		defer c.RUnlock()
 
