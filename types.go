@@ -68,6 +68,9 @@ type Channel struct {
 	// droppedAsDirect is set once a DM transition was reported, so turning back into a channel is reported too.
 	droppedAsDirect bool
 
+	// deferredMembers are member changes held back while the room may be a DM in creation, see deferMember.
+	deferredMembers []*MemberChange
+
 	heroes       []id.UserID // members the server suggests to name the room after, from the sync summary
 	reportedName string      // channel name last reported to the consumer, see RoomNameHandler
 	delivering   bool        // a name callback is running, see reportNameLocked

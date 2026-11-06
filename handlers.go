@@ -127,14 +127,96 @@ func (c *Client) inferredDirectLocked(ch *Channel) (id.UserID, bool) {
 	return peer, peer != ""
 }
 
-// memberInFlight reports whether roomID may be a DM that SendDirect is still creating, which
-// the consumer must not learn of as a channel.
-func (c *Client) memberInFlight(roomID id.RoomID) bool {
+// maxDeferredMembers bounds the member changes held back per room while it may be a DM in creation.
+const maxDeferredMembers = 16
+
+// deferMember holds change back if its room may be a DM that SendDirect is still creating, which
+// the consumer must not learn of as a channel. It is replayed by flushDeferredMembers unless the
+// room turns out to be a DM.
+func (c *Client) deferMember(change *MemberChange) bool {
 	c.RLock()
+	defer c.RUnlock()
+
+	ch, ok := c.channels[change.RoomID]
+	if !ok {
+		return false
+	}
+
+	ch.Lock()
+	defer ch.Unlock()
+
+	if ch.IsDirect || !c.creatingDirectRoomLocked(ch) {
+		return false
+	}
+
+	if len(ch.deferredMembers) < maxDeferredMembers {
+		ch.deferredMembers = append(ch.deferredMembers, change)
+	}
+
+	return true
+}
+
+// takeDeferredMembers returns the held back changes of roomID once it is no longer in flight,
+// and drops them if it is a DM.
+func (c *Client) takeDeferredMembers(roomID id.RoomID) []*MemberChange {
+	c.RLock()
+	defer c.RUnlock()
+
 	ch, ok := c.channels[roomID]
+	if !ok {
+		return nil
+	}
+
+	ch.Lock()
+	defer ch.Unlock()
+
+	if len(ch.deferredMembers) == 0 || c.creatingDirectRoomLocked(ch) {
+		return nil
+	}
+
+	changes := ch.deferredMembers
+	ch.deferredMembers = nil
+
+	if _, inferred := c.inferredDirectLocked(ch); ch.IsDirect || inferred {
+		return nil
+	}
+
+	return changes
+}
+
+// flushDeferredMembers replays the member changes held back for roomID, if it is settled as a channel.
+func (c *Client) flushDeferredMembers(h MemberHandler, roomID id.RoomID) {
+	for _, change := range c.takeDeferredMembers(roomID) {
+		h.OnMember(change)
+	}
+}
+
+// flushAllDeferredMembers is flushDeferredMembers for every room, for when a SendDirect finished.
+func (c *Client) flushAllDeferredMembers() {
+	h, ok := c.handler.(MemberHandler)
+	if !ok {
+		return
+	}
+
+	c.RLock()
+
+	var pending []id.RoomID
+
+	for roomID, ch := range c.channels {
+		ch.RLock()
+
+		if len(ch.deferredMembers) != 0 {
+			pending = append(pending, roomID)
+		}
+
+		ch.RUnlock()
+	}
+
 	c.RUnlock()
 
-	return ok && c.creatingDirectRoom(ch)
+	for _, roomID := range pending {
+		c.flushDeferredMembers(h, roomID)
+	}
 }
 
 func (c *Client) handleMember(_ context.Context, ev *event.Event) {
@@ -153,14 +235,21 @@ func (c *Client) handleMember(_ context.Context, ev *event.Event) {
 		c.applyMember(ev, member, targetID)
 	}
 
-	if h, ok := c.handler.(MemberHandler); ok && c.synced.Load() && !c.memberInFlight(ev.RoomID) {
-		h.OnMember(&MemberChange{
+	if h, ok := c.handler.(MemberHandler); ok && c.synced.Load() {
+		change := &MemberChange{
 			RoomID:     ev.RoomID,
 			UserID:     targetID,
 			Sender:     ev.Sender,
 			Membership: member.Membership,
 			Reason:     member.Reason,
-		})
+		}
+
+		if c.deferMember(change) {
+			return
+		}
+
+		c.flushDeferredMembers(h, ev.RoomID)
+		h.OnMember(change)
 	}
 }
 

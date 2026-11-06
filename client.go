@@ -854,6 +854,8 @@ func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.E
 			c.doneCreatingDirectLocked(userID)
 			c.Unlock()
 
+			c.flushAllDeferredMembers()
+
 			return "", err
 		}
 
@@ -868,6 +870,8 @@ func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.E
 		c.addDirectLocked(roomID, userID)
 		c.doneCreatingDirectLocked(userID)
 		c.Unlock()
+
+		c.flushAllDeferredMembers()
 
 		c.recordDirect(ctx, userID, roomID)
 	} else {
