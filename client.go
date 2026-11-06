@@ -746,28 +746,54 @@ func (c *Client) doneCreatingDirectLocked(userID id.UserID) {
 }
 
 // creatingDirectRoomLocked reports whether ch may be the room an in-flight SendDirect is
-// creating. Sync can deliver it before CreateRoom returns, when it cannot be marked as a DM yet.
-// c must be read locked and ch locked.
+// creating, which is invite-only, unnamed and has the creator and one in-flight target. Sync can
+// deliver it before CreateRoom returns, when it cannot be marked as a DM yet. A room is only
+// withheld if nothing known contradicts that and something positively identifies the target,
+// either a member, a hero or a two member count. c must be read locked and ch locked.
 func (c *Client) creatingDirectRoomLocked(ch *Channel) bool {
-	if len(c.creatingDirect) == 0 || ch.listedAsChannel || ch.Name != "" || ch.Alias != "" {
+	if len(c.creatingDirect) == 0 || ch.listedAsChannel || ch.Name != "" || ch.Alias != "" || len(ch.AltAliases) != 0 {
 		return false
 	}
 
-	var peers int
+	if ch.worldReadable || (ch.joinRule != "" && ch.joinRule != event.JoinRuleInvite) {
+		return false
+	}
+
+	if ch.joinedSeen && ch.invitedSeen && ch.joinedCount+ch.invitedCount != 2 {
+		return false
+	}
+
+	var peer id.UserID
+
+	for _, userID := range ch.heroes {
+		if userID == c.mc.UserID {
+			continue
+		}
+
+		if peer != "" && peer != userID {
+			return false
+		}
+
+		peer = userID
+	}
 
 	for userID := range ch.Members {
 		if userID == c.mc.UserID {
 			continue
 		}
 
-		peers++
-
-		if peers > 1 || c.creatingDirect[userID] == 0 {
+		if peer != "" && peer != userID {
 			return false
 		}
+
+		peer = userID
 	}
 
-	return true
+	if peer != "" {
+		return c.creatingDirect[peer] != 0
+	}
+
+	return ch.joinedSeen && ch.invitedSeen
 }
 
 // SendDirect sends a message to userID, creating the direct room if needed.
