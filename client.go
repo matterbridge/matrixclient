@@ -749,8 +749,9 @@ func (c *Client) doneCreatingDirectLocked(userID id.UserID) {
 // creatingDirectRoomLocked reports whether ch may be the room an in-flight SendDirect is
 // creating, which is invite-only, unnamed and has the creator and one in-flight target. Sync can
 // deliver it before CreateRoom returns, when it cannot be marked as a DM yet. A room is only
-// withheld if nothing known contradicts that and something positively identifies the target,
-// either a member, a hero or, for a room with only the creator so far, the invite-only join rule. c must be read locked and ch locked.
+// withheld if nothing known contradicts that: a known peer must be an in-flight target, a room
+// without a known peer is withheld too until its state arrives or the creation finishes.
+// c must be read locked and ch locked.
 func (c *Client) creatingDirectRoomLocked(ch *Channel) bool {
 	if len(c.creatingDirect) == 0 || !ch.mayBeNewDirectLocked() {
 		return false
@@ -765,9 +766,10 @@ func (c *Client) creatingDirectRoomLocked(ch *Channel) bool {
 		return c.creatingDirect[peer] != 0
 	}
 
-	// Nobody else is known yet, as before the invite is committed. A freshly created direct room
-	// is invite-only, which sync reports with its first state.
-	return ch.joinRule == event.JoinRuleInvite
+	// Nobody else is known yet, as before the invite is committed, and the join rule may not
+	// have been dispatched yet. Listing such a room would mark it as a channel for good, so it
+	// stays hidden until its state arrives or the creation finishes.
+	return true
 }
 
 // mayBeNewDirectLocked reports whether nothing known about ch rules out a freshly created
