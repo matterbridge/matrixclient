@@ -47,6 +47,7 @@ func (h helper) InitVerification(ctx context.Context, notify func(*matrixclient.
 // otherwise only protected by the helper's private lock.
 type lockedStore struct {
 	verificationhelper.VerificationStore
+
 	mu sync.Mutex
 }
 
@@ -126,6 +127,7 @@ func (r *relatedSyncer) OnEventType(eventType event.Type, callback mautrix.Event
 // itself and then has SendMessageEvent encrypt it again, and never expires it.
 type roomHelper struct {
 	*verificationhelper.VerificationHelper
+
 	client *mautrix.Client
 	store  verificationhelper.VerificationStore
 }
@@ -160,8 +162,11 @@ func (r *roomHelper) StartInRoomVerification(ctx context.Context, roomID id.Room
 		return "", err
 	}
 
+	// Outlive the caller's context so the timeout still fires.
+	timeoutCtx := context.WithoutCancel(ctx)
+
 	time.AfterFunc(time.Until(expires), func() {
-		_ = r.CancelVerification(context.Background(), txnID, event.VerificationCancelCodeTimeout, "verification timed out")
+		_ = r.CancelVerification(timeoutCtx, txnID, event.VerificationCancelCodeTimeout, "verification timed out")
 	})
 
 	return txnID, nil
