@@ -140,6 +140,11 @@ func (c *Client) deferMember(change *MemberChange) bool {
 		return false
 	}
 
+	// An invitation cannot be a room SendDirect created, and its channel is removed once it is gone.
+	if _, invited := c.invitations[change.RoomID]; invited {
+		return false
+	}
+
 	ch.Lock()
 	defer ch.Unlock()
 
@@ -149,7 +154,8 @@ func (c *Client) deferMember(change *MemberChange) bool {
 
 	for i, held := range ch.deferredMembers {
 		if held.UserID == change.UserID {
-			ch.deferredMembers[i] = change
+			// Moved last, so the surviving changes stay in chronological order.
+			ch.deferredMembers = append(slices.Delete(ch.deferredMembers, i, i+1), change)
 
 			return true
 		}
