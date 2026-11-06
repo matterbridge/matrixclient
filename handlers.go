@@ -127,107 +127,14 @@ func (c *Client) inferredDirectLocked(ch *Channel) (id.UserID, bool) {
 	return peer, peer != ""
 }
 
-// deferMember holds change back if its room may be a DM that SendDirect is still creating, which
-// the consumer must not learn of as a channel. Only the latest change per user is kept, as that
-// is the final membership. It is replayed by flushDeferredMembers unless the room turns out to be
-// a DM. Deferral and replay only run on the sync goroutine, so delivery stays ordered.
-func (c *Client) deferMember(change *MemberChange) bool {
+// memberInFlight reports whether roomID may be a DM that SendDirect is still creating, which
+// the consumer must not learn of as a channel.
+func (c *Client) memberInFlight(roomID id.RoomID) bool {
 	c.RLock()
-	defer c.RUnlock()
-
-	ch, ok := c.channels[change.RoomID]
-	if !ok {
-		return false
-	}
-
-	// An invitation cannot be a room SendDirect created, and its channel is removed once it is gone.
-	if _, invited := c.invitations[change.RoomID]; invited {
-		return false
-	}
-
-	ch.Lock()
-	defer ch.Unlock()
-
-	if ch.IsDirect || !c.creatingDirectRoomLocked(ch) {
-		return false
-	}
-
-	for i, held := range ch.deferredMembers {
-		if held.UserID == change.UserID {
-			// Moved last, so the surviving changes stay in chronological order.
-			ch.deferredMembers = append(slices.Delete(ch.deferredMembers, i, i+1), change)
-
-			return true
-		}
-	}
-
-	ch.deferredMembers = append(ch.deferredMembers, change)
-
-	return true
-}
-
-// takeDeferredMembers returns the held back changes of roomID once it is no longer in flight,
-// and drops them if it is a DM.
-func (c *Client) takeDeferredMembers(roomID id.RoomID) []*MemberChange {
-	c.RLock()
-	defer c.RUnlock()
-
 	ch, ok := c.channels[roomID]
-	if !ok {
-		return nil
-	}
-
-	ch.Lock()
-	defer ch.Unlock()
-
-	if len(ch.deferredMembers) == 0 || c.creatingDirectRoomLocked(ch) {
-		return nil
-	}
-
-	changes := ch.deferredMembers
-	ch.deferredMembers = nil
-
-	if _, inferred := c.inferredDirectLocked(ch); ch.IsDirect || inferred {
-		return nil
-	}
-
-	return changes
-}
-
-// flushDeferredMembers replays the member changes held back for roomID, if it is settled as a channel.
-func (c *Client) flushDeferredMembers(h MemberHandler, roomID id.RoomID) {
-	for _, change := range c.takeDeferredMembers(roomID) {
-		h.OnMember(change)
-	}
-}
-
-// flushAllDeferredMembers is flushDeferredMembers for every room. It runs on the sync goroutine
-// after each sync response, once its state was applied and a finished SendDirect has marked its room.
-func (c *Client) flushAllDeferredMembers() {
-	h, ok := c.handler.(MemberHandler)
-	if !ok {
-		return
-	}
-
-	c.RLock()
-
-	var pending []id.RoomID
-
-	for roomID, ch := range c.channels {
-		ch.RLock()
-
-		if len(ch.deferredMembers) != 0 {
-			pending = append(pending, roomID)
-		}
-
-		ch.RUnlock()
-	}
-
 	c.RUnlock()
 
-	for _, roomID := range pending {
-		c.flushDeferredMembers(h, roomID)
-	}
+	return ok && c.creatingDirectRoom(ch)
 }
 
 func (c *Client) handleMember(_ context.Context, ev *event.Event) {
@@ -246,21 +153,14 @@ func (c *Client) handleMember(_ context.Context, ev *event.Event) {
 		c.applyMember(ev, member, targetID)
 	}
 
-	if h, ok := c.handler.(MemberHandler); ok && c.synced.Load() {
-		change := &MemberChange{
+	if h, ok := c.handler.(MemberHandler); ok && c.synced.Load() && !c.memberInFlight(ev.RoomID) {
+		h.OnMember(&MemberChange{
 			RoomID:     ev.RoomID,
 			UserID:     targetID,
 			Sender:     ev.Sender,
 			Membership: member.Membership,
 			Reason:     member.Reason,
-		}
-
-		if c.deferMember(change) {
-			return
-		}
-
-		c.flushDeferredMembers(h, ev.RoomID)
-		h.OnMember(change)
+		})
 	}
 }
 
