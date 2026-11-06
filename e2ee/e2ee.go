@@ -160,7 +160,7 @@ func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 	// server-side. This read-only request does not touch the crypto store.
 	_, err = h.client.GetDeviceInfo(ctx, h.client.DeviceID)
 	if err != nil {
-		return false, fmt.Errorf("own device %s not found on server: %w", h.client.DeviceID, err)
+		return false, fmt.Errorf("get own device %s from server: %w", h.client.DeviceID, err)
 	}
 
 	switch dev.Trust {
