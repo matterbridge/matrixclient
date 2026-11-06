@@ -751,42 +751,13 @@ func (c *Client) doneCreatingDirectLocked(userID id.UserID) {
 // withheld if nothing known contradicts that and something positively identifies the target,
 // either a member, a hero or a two member count. c must be read locked and ch locked.
 func (c *Client) creatingDirectRoomLocked(ch *Channel) bool {
-	if len(c.creatingDirect) == 0 || ch.listedAsChannel || ch.Name != "" || ch.Alias != "" || len(ch.AltAliases) != 0 {
+	if len(c.creatingDirect) == 0 || !ch.mayBeNewDirectLocked() {
 		return false
 	}
 
-	if ch.worldReadable || (ch.joinRule != "" && ch.joinRule != event.JoinRuleInvite) {
+	peer, ok := c.singlePeerLocked(ch)
+	if !ok {
 		return false
-	}
-
-	if ch.joinedSeen && ch.invitedSeen && ch.joinedCount+ch.invitedCount != 2 {
-		return false
-	}
-
-	var peer id.UserID
-
-	for _, userID := range ch.heroes {
-		if userID == c.mc.UserID {
-			continue
-		}
-
-		if peer != "" && peer != userID {
-			return false
-		}
-
-		peer = userID
-	}
-
-	for userID := range ch.Members {
-		if userID == c.mc.UserID {
-			continue
-		}
-
-		if peer != "" && peer != userID {
-			return false
-		}
-
-		peer = userID
 	}
 
 	if peer != "" {
@@ -794,6 +765,54 @@ func (c *Client) creatingDirectRoomLocked(ch *Channel) bool {
 	}
 
 	return ch.joinedSeen && ch.invitedSeen
+}
+
+// mayBeNewDirectLocked reports whether nothing known about ch rules out a freshly created
+// direct room. ch must be locked.
+func (ch *Channel) mayBeNewDirectLocked() bool {
+	if ch.listedAsChannel || ch.Name != "" || ch.Alias != "" || len(ch.AltAliases) != 0 || ch.worldReadable {
+		return false
+	}
+
+	if ch.joinRule != "" && ch.joinRule != event.JoinRuleInvite {
+		return false
+	}
+
+	return !ch.joinedSeen || !ch.invitedSeen || ch.joinedCount+ch.invitedCount == 2
+}
+
+// singlePeerLocked returns the only user other than ourselves among the heroes and members
+// of ch, "" if there is none, and false if there are several. c must be read locked and ch locked.
+func (c *Client) singlePeerLocked(ch *Channel) (id.UserID, bool) {
+	var peer id.UserID
+
+	note := func(userID id.UserID) bool {
+		if userID == c.mc.UserID || userID == peer {
+			return true
+		}
+
+		if peer != "" {
+			return false
+		}
+
+		peer = userID
+
+		return true
+	}
+
+	for _, userID := range ch.heroes {
+		if !note(userID) {
+			return "", false
+		}
+	}
+
+	for userID := range ch.Members {
+		if !note(userID) {
+			return "", false
+		}
+	}
+
+	return peer, true
 }
 
 // SendDirect sends a message to userID, creating the direct room if needed.
