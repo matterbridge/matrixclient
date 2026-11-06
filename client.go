@@ -783,7 +783,7 @@ func (ch *Channel) mayBeNewDirectLocked() bool {
 		return false
 	}
 
-	return !ch.joinedSeen || !ch.invitedSeen || ch.joinedCount+ch.invitedCount <= 2
+	return ch.joinedCount+ch.invitedCount <= 2
 }
 
 // singlePeerLocked returns the only user other than ourselves among the heroes and members
