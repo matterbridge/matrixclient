@@ -257,6 +257,11 @@ func (h helper) UserVerified(ctx context.Context, userID id.UserID) (bool, error
 		return false, nil
 	}
 
+	// Same check as DeviceVerified: a replaced own master key is not trusted.
+	if cur := m.CrossSigningKeys; cur != nil && cur.MasterKey.PublicKey() != omsk.Key {
+		return false, nil
+	}
+
 	signed, err := m.CryptoStore.IsKeySignedBy(ctx, own, ousk.Key, own, omsk.Key)
 	if err != nil {
 		return false, fmt.Errorf("check user-signing key signature: %w", err)
