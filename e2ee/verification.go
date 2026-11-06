@@ -29,7 +29,7 @@ func (h helper) InitVerification(ctx context.Context, notify func(*matrixclient.
 		return nil, errors.New("e2ee: client syncer must implement ExtensibleSyncer")
 	}
 
-	h.client.Syncer = &relatedSyncer{ExtensibleSyncer: syncer, Syncer: h.client.Syncer}
+	h.client.Syncer = &relatedSyncer{ExtensibleSyncer: syncer, Syncer: h.client.Syncer, client: h.client, store: store}
 
 	err := vh.Init(ctx)
 	h.client.Syncer = relatedOriginal(h.client.Syncer)
@@ -40,7 +40,7 @@ func (h helper) InitVerification(ctx context.Context, notify func(*matrixclient.
 
 	h.client.Verification = vh
 
-	return &roomHelper{VerificationHelper: vh, client: h.client, store: store}, nil
+	return &roomHelper{VerificationHelper: vh, client: h.client, store: store, callbacks: callbacks}, nil
 }
 
 // lockedStore serializes access to the helper's in-memory store, which is
@@ -88,10 +88,14 @@ func (s *lockedStore) GetAllVerificationTransactions(ctx context.Context) ([]ver
 
 // relatedSyncer makes the helper's in-room handlers see the request event ID
 // from m.relates_to as the event ID: replies are filed under the request, not
-// under their own event ID.
+// under their own event ID. Only events from the transaction's counterpart in
+// its room are forwarded, which also drops this device's own sync echoes.
 type relatedSyncer struct {
 	mautrix.ExtensibleSyncer
 	mautrix.Syncer
+
+	client *mautrix.Client
+	store  verificationhelper.VerificationStore
 }
 
 func relatedOriginal(s mautrix.Syncer) mautrix.Syncer {
@@ -114,6 +118,16 @@ func (r *relatedSyncer) OnEventType(eventType event.Type, callback mautrix.Event
 				return
 			}
 
+			txn, err := r.store.GetVerificationTransaction(ctx, id.VerificationTransactionID(rel.OptionalGetRelatesTo().EventID))
+			if err != nil || evt.RoomID != txn.RoomID || evt.Sender != txn.TheirUserID {
+				return
+			}
+
+			// Self-verification: the counterpart shares our user ID, so tell this device apart.
+			if fromDevice, _ := evt.Content.Raw["from_device"].(string); evt.Sender == r.client.UserID && id.DeviceID(fromDevice) == r.client.DeviceID {
+				return
+			}
+
 			related := *evt
 			related.ID = rel.OptionalGetRelatesTo().EventID
 			inner(ctx, &related)
@@ -128,8 +142,9 @@ func (r *relatedSyncer) OnEventType(eventType event.Type, callback mautrix.Event
 type roomHelper struct {
 	*verificationhelper.VerificationHelper
 
-	client *mautrix.Client
-	store  verificationhelper.VerificationStore
+	client    *mautrix.Client
+	store     verificationhelper.VerificationStore
+	callbacks verificationCallbacks
 }
 
 const verificationTimeout = 10 * time.Minute
@@ -165,11 +180,38 @@ func (r *roomHelper) StartInRoomVerification(ctx context.Context, roomID id.Room
 	// Outlive the caller's context so the timeout still fires.
 	timeoutCtx := context.WithoutCancel(ctx)
 
-	time.AfterFunc(time.Until(expires), func() {
-		_ = r.CancelVerification(timeoutCtx, txnID, event.VerificationCancelCodeTimeout, "verification timed out")
-	})
+	time.AfterFunc(time.Until(expires), func() { r.expire(timeoutCtx, txnID) })
 
 	return txnID, nil
+}
+
+// expire drops a request that is still pending. The transaction is dismissed
+// even if the cancellation cannot be delivered, and consumers are notified
+// only when this call removed it.
+func (r *roomHelper) expire(ctx context.Context, txnID id.VerificationTransactionID) {
+	_, err := r.store.GetVerificationTransaction(ctx, txnID)
+	if err != nil {
+		return
+	}
+
+	const reason = "verification timed out"
+
+	err = r.CancelVerification(ctx, txnID, event.VerificationCancelCodeTimeout, reason)
+	if err != nil {
+		r.client.Log.Warn().Err(err).Stringer("transaction_id", txnID).Msg("Failed to cancel expired verification")
+
+		err = r.DismissVerification(ctx, txnID)
+		if err != nil {
+			return
+		}
+	}
+
+	r.callbacks.send(&matrixclient.Verification{
+		TransactionID: txnID,
+		Stage:         matrixclient.VerificationCancelled,
+		CancelCode:    event.VerificationCancelCodeTimeout,
+		Reason:        reason,
+	})
 }
 
 type verificationCallbacks struct {
