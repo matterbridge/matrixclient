@@ -57,6 +57,7 @@ type Client struct {
 	// Accepted direct invites may not appear in m.direct, even after joining.
 	acceptedDirect map[id.RoomID]id.UserID
 	pendingDirect  map[id.RoomID]pendingAssoc // associations not yet seen in m.direct, see recordDirect
+	creatingDirect map[id.UserID]int          // SendDirect calls inside CreateRoom, whose room is unknown until it returns
 	leftRooms      map[id.RoomID]struct{}     // excludes departed rooms from selection, not DM classification
 	joinedRooms    map[id.RoomID]struct{}     // rooms seen in a sync join section or created here, m.direct may list others
 
@@ -120,6 +121,7 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 		invitations:    make(map[id.RoomID]Invitation),
 		acceptedDirect: make(map[id.RoomID]id.UserID),
 		pendingDirect:  make(map[id.RoomID]pendingAssoc),
+		creatingDirect: make(map[id.UserID]int),
 		leftRooms:      make(map[id.RoomID]struct{}),
 		joinedRooms:    make(map[id.RoomID]struct{}),
 
@@ -613,6 +615,13 @@ func (c *Client) Rooms() []RoomInfo {
 		_, inferred := c.inferredDirectLocked(ch)
 		unresolved, direct, members, last := ch.nameUnresolvedLocked(), ch.IsDirect || inferred, len(ch.Members), ch.LastActivity
 
+		// Withheld until SendDirect marks it, so it is not listed as a channel and dropped again.
+		if !direct && c.creatingDirectRoomLocked(ch) {
+			ch.Unlock()
+
+			continue
+		}
+
 		// The name of a DM is not a channel name, the baseline stays what the consumer holds.
 		if !direct {
 			ch.reportNameLocked(display)
@@ -726,16 +735,51 @@ func (c *Client) Send(ctx context.Context, roomID id.RoomID, parentID id.EventID
 	return resp.EventID, nil
 }
 
+func (c *Client) doneCreatingDirectLocked(userID id.UserID) {
+	if c.creatingDirect[userID] <= 1 {
+		delete(c.creatingDirect, userID)
+
+		return
+	}
+
+	c.creatingDirect[userID]--
+}
+
+// creatingDirectRoomLocked reports whether ch may be the room an in-flight SendDirect is
+// creating. Sync can deliver it before CreateRoom returns, when it cannot be marked as a DM yet.
+// c must be read locked and ch locked.
+func (c *Client) creatingDirectRoomLocked(ch *Channel) bool {
+	if len(c.creatingDirect) == 0 || ch.listedAsChannel || ch.Name != "" || ch.Alias != "" {
+		return false
+	}
+
+	for userID := range ch.Members {
+		if userID != c.mc.UserID && c.creatingDirect[userID] == 0 {
+			return false
+		}
+	}
+
+	return true
+}
+
 // SendDirect sends a message to userID, creating the direct room if needed.
 func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.EventID, text string) (id.EventID, error) {
 	roomID := c.DirectRoom(userID)
 	if roomID == "" {
+		c.Lock()
+		c.creatingDirect[userID]++
+		c.Unlock()
+
 		resp, err := c.mc.CreateRoom(ctx, &mautrix.ReqCreateRoom{
 			Preset:   "trusted_private_chat",
 			Invite:   []id.UserID{userID},
 			IsDirect: true,
 		})
 		if err != nil {
+			c.Lock()
+			c.doneCreatingDirectLocked(userID)
+			c.Unlock()
+
 			return "", err
 		}
 
@@ -748,6 +792,7 @@ func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.E
 		c.joinedRooms[roomID] = struct{}{}
 		c.pendingDirect[roomID] = pendingAssoc{user: userID}
 		c.addDirectLocked(roomID, userID)
+		c.doneCreatingDirectLocked(userID)
 		c.Unlock()
 
 		c.recordDirect(ctx, userID, roomID)
