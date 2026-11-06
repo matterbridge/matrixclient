@@ -236,6 +236,32 @@ func (h helper) DeviceVerified(ctx context.Context) (bool, error) {
 	return trusted || msk.Key == msk.First, nil
 }
 
+// ownMasterTrusted reports whether our master key msk is trusted, signatures
+// under it prove nothing otherwise: it is the locally held one, the first one
+// seen, or signed by our device. A locally held key that differs means it was
+// replaced.
+func (h helper) ownMasterTrusted(ctx context.Context, m *crypto.OlmMachine, msk id.CrossSigningKey) (bool, error) {
+	if cur := m.CrossSigningKeys; cur != nil {
+		return cur.MasterKey.PublicKey() == msk.Key, nil
+	}
+
+	if msk.Key == msk.First {
+		return true, nil
+	}
+
+	dev, err := h.ownDevice(ctx, m)
+	if err != nil {
+		return false, err
+	}
+
+	signed, err := m.CryptoStore.IsKeySignedBy(ctx, h.client.UserID, msk.Key, h.client.UserID, dev.SigningKey)
+	if err != nil {
+		return false, fmt.Errorf("check own master key signature: %w", err)
+	}
+
+	return signed, nil
+}
+
 // UserVerified implements matrixclient.UserVerifier. Like DeviceVerified it
 // reads the crypto store only. Another user is verified when their master key
 // is signed by our user-signing key, which our master key must have signed.
@@ -257,30 +283,9 @@ func (h helper) UserVerified(ctx context.Context, userID id.UserID) (bool, error
 		return false, nil
 	}
 
-	// Our master key must itself be trusted, signatures under it prove nothing
-	// otherwise: it is the locally held one, the first one seen, or signed by
-	// our device. A locally held key that differs means it was replaced.
-	cur := m.CrossSigningKeys
-
-	switch {
-	case cur != nil:
-		if cur.MasterKey.PublicKey() != omsk.Key {
-			return false, nil
-		}
-	case omsk.Key != omsk.First:
-		dev, err := h.ownDevice(ctx, m)
-		if err != nil {
-			return false, err
-		}
-
-		signed, err := m.CryptoStore.IsKeySignedBy(ctx, own, omsk.Key, own, dev.SigningKey)
-		if err != nil {
-			return false, fmt.Errorf("check own master key signature: %w", err)
-		}
-
-		if !signed {
-			return false, nil
-		}
+	trusted, err := h.ownMasterTrusted(ctx, m, omsk)
+	if err != nil || !trusted {
+		return false, err
 	}
 
 	signed, err := m.CryptoStore.IsKeySignedBy(ctx, own, ousk.Key, own, omsk.Key)
