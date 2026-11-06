@@ -150,7 +150,7 @@ func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Cli
 
 	// Ready is called from the sync goroutine, after the events of the first
 	// sync response were processed, so handler calls stay serialized.
-	mc.Syncer = &readySyncer{DefaultSyncer: syncer, ready: h.Ready, synced: c.onSynced, named: c.noteRoomNames, track: c.noteTimeline, summary: c.logSyncSummary, leftInvites: c.removeLeftInvitations, decrypted: c.noteDecrypted, failed: c.onSyncFailed}
+	mc.Syncer = &readySyncer{DefaultSyncer: syncer, ready: h.Ready, synced: c.onSynced, named: c.noteRoomNames, members: c.flushAllDeferredMembers, track: c.noteTimeline, summary: c.logSyncSummary, leftInvites: c.removeLeftInvitations, decrypted: c.noteDecrypted, failed: c.onSyncFailed}
 
 	err = c.login(ctx, o.crypto)
 	if err != nil {
@@ -354,6 +354,7 @@ type readySyncer struct {
 	ready     func()
 	synced    func()
 	named     func(*mautrix.RespSync)
+	members   func()
 	track     func(*mautrix.RespSync)
 	summary   func(*mautrix.RespSync)
 	decrypted func(*event.Event)
@@ -374,6 +375,7 @@ func (r *readySyncer) ProcessResponse(ctx context.Context, res *mautrix.RespSync
 		r.leftInvites(res)
 		r.synced()
 		r.named(res)
+		r.members()
 		r.once.Do(r.ready)
 	}
 
@@ -854,8 +856,6 @@ func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.E
 			c.doneCreatingDirectLocked(userID)
 			c.Unlock()
 
-			c.flushAllDeferredMembers()
-
 			return "", err
 		}
 
@@ -870,8 +870,6 @@ func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.E
 		c.addDirectLocked(roomID, userID)
 		c.doneCreatingDirectLocked(userID)
 		c.Unlock()
-
-		c.flushAllDeferredMembers()
 
 		c.recordDirect(ctx, userID, roomID)
 	} else {

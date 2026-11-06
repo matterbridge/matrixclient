@@ -127,12 +127,10 @@ func (c *Client) inferredDirectLocked(ch *Channel) (id.UserID, bool) {
 	return peer, peer != ""
 }
 
-// maxDeferredMembers bounds the member changes held back per room while it may be a DM in creation.
-const maxDeferredMembers = 16
-
 // deferMember holds change back if its room may be a DM that SendDirect is still creating, which
-// the consumer must not learn of as a channel. It is replayed by flushDeferredMembers unless the
-// room turns out to be a DM.
+// the consumer must not learn of as a channel. Only the latest change per user is kept, as that
+// is the final membership. It is replayed by flushDeferredMembers unless the room turns out to be
+// a DM. Deferral and replay only run on the sync goroutine, so delivery stays ordered.
 func (c *Client) deferMember(change *MemberChange) bool {
 	c.RLock()
 	defer c.RUnlock()
@@ -149,9 +147,15 @@ func (c *Client) deferMember(change *MemberChange) bool {
 		return false
 	}
 
-	if len(ch.deferredMembers) < maxDeferredMembers {
-		ch.deferredMembers = append(ch.deferredMembers, change)
+	for i, held := range ch.deferredMembers {
+		if held.UserID == change.UserID {
+			ch.deferredMembers[i] = change
+
+			return true
+		}
 	}
+
+	ch.deferredMembers = append(ch.deferredMembers, change)
 
 	return true
 }
@@ -191,7 +195,8 @@ func (c *Client) flushDeferredMembers(h MemberHandler, roomID id.RoomID) {
 	}
 }
 
-// flushAllDeferredMembers is flushDeferredMembers for every room, for when a SendDirect finished.
+// flushAllDeferredMembers is flushDeferredMembers for every room. It runs on the sync goroutine
+// after each sync response, once its state was applied and a finished SendDirect has marked its room.
 func (c *Client) flushAllDeferredMembers() {
 	h, ok := c.handler.(MemberHandler)
 	if !ok {
