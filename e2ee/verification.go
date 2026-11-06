@@ -49,6 +49,10 @@ type lockedStore struct {
 	verificationhelper.VerificationStore
 
 	mu sync.Mutex
+	// op serializes whole verification operations (forwarded events and
+	// expiry): mautrix drops its lock between lookup and handler, so per-call
+	// locking alone allows a reply to resurrect an expired transaction.
+	op sync.Mutex
 }
 
 func (s *lockedStore) DeleteVerification(ctx context.Context, txnID id.VerificationTransactionID) error {
@@ -95,7 +99,7 @@ type relatedSyncer struct {
 	mautrix.Syncer
 
 	client *mautrix.Client
-	store  verificationhelper.VerificationStore
+	store  *lockedStore
 }
 
 func relatedOriginal(s mautrix.Syncer) mautrix.Syncer {
@@ -118,8 +122,16 @@ func (r *relatedSyncer) OnEventType(eventType event.Type, callback mautrix.Event
 				return
 			}
 
+			r.store.op.Lock()
+			defer r.store.op.Unlock()
+
 			txn, err := r.store.GetVerificationTransaction(ctx, id.VerificationTransactionID(rel.OptionalGetRelatesTo().EventID))
 			if err != nil || evt.RoomID != txn.RoomID || evt.Sender != txn.TheirUserID {
+				return
+			}
+
+			// Unsigned.TransactionID is only set on events sent by this client.
+			if evt.Unsigned.TransactionID != "" {
 				return
 			}
 
@@ -143,7 +155,7 @@ type roomHelper struct {
 	*verificationhelper.VerificationHelper
 
 	client    *mautrix.Client
-	store     verificationhelper.VerificationStore
+	store     *lockedStore
 	callbacks verificationCallbacks
 }
 
@@ -189,6 +201,9 @@ func (r *roomHelper) StartInRoomVerification(ctx context.Context, roomID id.Room
 // even if the cancellation cannot be delivered, and consumers are notified
 // only when this call removed it.
 func (r *roomHelper) expire(ctx context.Context, txnID id.VerificationTransactionID) {
+	r.store.op.Lock()
+	defer r.store.op.Unlock()
+
 	_, err := r.store.GetVerificationTransaction(ctx, txnID)
 	if err != nil {
 		return
