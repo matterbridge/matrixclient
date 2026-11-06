@@ -20,7 +20,7 @@ import (
 // InitVerification implements matrixclient.VerificationProvider.
 func (h helper) InitVerification(ctx context.Context, notify func(*matrixclient.Verification)) (matrixclient.VerificationController, error) {
 	callbacks := verificationCallbacks{ctx: ctx, notify: notify}
-	store := &lockedStore{VerificationStore: verificationhelper.NewInMemoryVerificationStore()}
+	store := &lockedStore{VerificationStore: verificationhelper.NewInMemoryVerificationStore(), deleted: map[id.VerificationTransactionID]time.Time{}}
 	vh := verificationhelper.NewVerificationHelper(h.client, h.Machine(), store, callbacks, false, false, true)
 
 	// The helper registers its handlers on the client's syncer during Init.
@@ -40,7 +40,7 @@ func (h helper) InitVerification(ctx context.Context, notify func(*matrixclient.
 
 	h.client.Verification = vh
 
-	return &roomHelper{VerificationHelper: vh, client: h.client, store: store, callbacks: callbacks}, nil
+	return &roomHelper{VerificationHelper: vh, client: h.client, store: store, callbacks: callbacks, session: ctx}, nil
 }
 
 // lockedStore serializes access to the helper's in-memory store, which is
@@ -53,11 +53,28 @@ type lockedStore struct {
 	// expiry): mautrix drops its lock between lookup and handler, so per-call
 	// locking alone allows a reply to resurrect an expired transaction.
 	op sync.Mutex
+
+	// deleted holds recently removed IDs. Mautrix's own expiry and cancellation
+	// delete without taking op, so a handler that looked the transaction up
+	// earlier must not be able to save it back.
+	deleted map[id.VerificationTransactionID]time.Time
 }
+
+const tombstoneTTL = time.Minute
 
 func (s *lockedStore) DeleteVerification(ctx context.Context, txnID id.VerificationTransactionID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	now := time.Now()
+
+	for k, at := range s.deleted {
+		if now.Sub(at) > tombstoneTTL {
+			delete(s.deleted, k)
+		}
+	}
+
+	s.deleted[txnID] = now
 
 	return s.VerificationStore.DeleteVerification(ctx, txnID)
 }
@@ -72,6 +89,10 @@ func (s *lockedStore) GetVerificationTransaction(ctx context.Context, txnID id.V
 func (s *lockedStore) SaveVerificationTransaction(ctx context.Context, txn verificationhelper.VerificationTransaction) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if _, gone := s.deleted[txn.TransactionID]; gone {
+		return verificationhelper.ErrUnknownVerificationTransaction
+	}
 
 	return s.VerificationStore.SaveVerificationTransaction(ctx, txn)
 }
@@ -157,6 +178,23 @@ type roomHelper struct {
 	client    *mautrix.Client
 	store     *lockedStore
 	callbacks verificationCallbacks
+	session   context.Context //nolint:containedctx
+}
+
+// CancelVerification serializes with forwarded in-room event handlers.
+func (r *roomHelper) CancelVerification(ctx context.Context, txnID id.VerificationTransactionID, code event.VerificationCancelCode, reason string) error {
+	r.store.op.Lock()
+	defer r.store.op.Unlock()
+
+	return r.VerificationHelper.CancelVerification(ctx, txnID, code, reason)
+}
+
+// DismissVerification serializes with forwarded in-room event handlers.
+func (r *roomHelper) DismissVerification(ctx context.Context, txnID id.VerificationTransactionID) error {
+	r.store.op.Lock()
+	defer r.store.op.Unlock()
+
+	return r.VerificationHelper.DismissVerification(ctx, txnID)
 }
 
 const verificationTimeout = 10 * time.Minute
@@ -189,10 +227,9 @@ func (r *roomHelper) StartInRoomVerification(ctx context.Context, roomID id.Room
 		return "", err
 	}
 
-	// Outlive the caller's context so the timeout still fires.
-	timeoutCtx := context.WithoutCancel(ctx)
-
-	time.AfterFunc(time.Until(expires), func() { r.expire(timeoutCtx, txnID) })
+	// The session context outlives this call but ends on logout, when the
+	// crypto store is closed.
+	time.AfterFunc(time.Until(expires), func() { r.expire(r.session, txnID) })
 
 	return txnID, nil
 }
@@ -201,6 +238,10 @@ func (r *roomHelper) StartInRoomVerification(ctx context.Context, roomID id.Room
 // even if the cancellation cannot be delivered, and consumers are notified
 // only when this call removed it.
 func (r *roomHelper) expire(ctx context.Context, txnID id.VerificationTransactionID) {
+	if ctx.Err() != nil {
+		return
+	}
+
 	r.store.op.Lock()
 	defer r.store.op.Unlock()
 
@@ -211,11 +252,11 @@ func (r *roomHelper) expire(ctx context.Context, txnID id.VerificationTransactio
 
 	const reason = "verification timed out"
 
-	err = r.CancelVerification(ctx, txnID, event.VerificationCancelCodeTimeout, reason)
+	err = r.VerificationHelper.CancelVerification(ctx, txnID, event.VerificationCancelCodeTimeout, reason)
 	if err != nil {
 		r.client.Log.Warn().Err(err).Stringer("transaction_id", txnID).Msg("Failed to cancel expired verification")
 
-		err = r.DismissVerification(ctx, txnID)
+		err = r.VerificationHelper.DismissVerification(ctx, txnID)
 		if err != nil {
 			return
 		}
