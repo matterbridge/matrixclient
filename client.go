@@ -753,8 +753,16 @@ func (c *Client) creatingDirectRoomLocked(ch *Channel) bool {
 		return false
 	}
 
+	var peers int
+
 	for userID := range ch.Members {
-		if userID != c.mc.UserID && c.creatingDirect[userID] == 0 {
+		if userID == c.mc.UserID {
+			continue
+		}
+
+		peers++
+
+		if peers > 1 || c.creatingDirect[userID] == 0 {
 			return false
 		}
 	}
