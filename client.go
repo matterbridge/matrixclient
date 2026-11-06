@@ -749,7 +749,7 @@ func (c *Client) doneCreatingDirectLocked(userID id.UserID) {
 // creating, which is invite-only, unnamed and has the creator and one in-flight target. Sync can
 // deliver it before CreateRoom returns, when it cannot be marked as a DM yet. A room is only
 // withheld if nothing known contradicts that and something positively identifies the target,
-// either a member, a hero or a two member count. c must be read locked and ch locked.
+// either a member, a hero or, for a room with only the creator so far, the invite-only join rule. c must be read locked and ch locked.
 func (c *Client) creatingDirectRoomLocked(ch *Channel) bool {
 	if len(c.creatingDirect) == 0 || !ch.mayBeNewDirectLocked() {
 		return false
@@ -764,7 +764,9 @@ func (c *Client) creatingDirectRoomLocked(ch *Channel) bool {
 		return c.creatingDirect[peer] != 0
 	}
 
-	return ch.joinedSeen && ch.invitedSeen
+	// Nobody else is known yet, as before the invite is committed. A freshly created direct room
+	// is invite-only, which sync reports with its first state.
+	return ch.joinRule == event.JoinRuleInvite
 }
 
 // mayBeNewDirectLocked reports whether nothing known about ch rules out a freshly created
@@ -778,7 +780,7 @@ func (ch *Channel) mayBeNewDirectLocked() bool {
 		return false
 	}
 
-	return !ch.joinedSeen || !ch.invitedSeen || ch.joinedCount+ch.invitedCount == 2
+	return !ch.joinedSeen || !ch.invitedSeen || ch.joinedCount+ch.invitedCount <= 2
 }
 
 // singlePeerLocked returns the only user other than ourselves among the heroes and members
