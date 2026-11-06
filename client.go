@@ -86,7 +86,7 @@ type Client struct {
 }
 
 // New logs in and starts syncing. Handler.Ready is called after the initial sync.
-func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Client, error) {
+func New(ctx context.Context, cred Credentials, h Handler, opts ...Option) (*Client, error) { //nolint:funlen
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -394,6 +394,7 @@ func (r *readySyncer) OnFailedSync(res *mautrix.RespSync, err error) (time.Durat
 	if randomErr == nil {
 		wait += time.Duration(jitter.Int64())
 	}
+
 	r.failures++
 
 	r.failed(err, wait)
