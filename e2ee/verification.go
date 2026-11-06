@@ -208,6 +208,10 @@ func (r *roomHelper) StartInRoomVerification(ctx context.Context, roomID id.Room
 		To:         to,
 	}
 
+	// Held until the transaction is saved so a fast reply is not dropped as unknown.
+	r.store.op.Lock()
+	defer r.store.op.Unlock()
+
 	resp, err := r.client.SendMessageEvent(ctx, roomID, event.EventMessage, &content)
 	if err != nil {
 		return "", fmt.Errorf("failed to send verification request: %w", err)
