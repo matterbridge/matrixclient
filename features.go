@@ -357,7 +357,7 @@ func (c *Client) handlePresence(_ context.Context, ev *event.Event) {
 
 func (c *Client) handlePinnedEvents(_ context.Context, ev *event.Event) {
 	content := ev.Content.AsPinnedEvents()
-	if content == nil {
+	if content == nil || ev.StateKey == nil || *ev.StateKey != "" {
 		return
 	}
 
