@@ -30,6 +30,12 @@
 - Comments: Document only intent, invariants, protocol quirks, and non-obvious constraints. Do not restate obvious code.
 - Consistency: Match the existing package conventions for naming, options, error handling, and method signatures.
 
+## matterclient Consistency
+
+- [matterclient](https://github.com/matterbridge/matterclient) is the reference implementation. `matrixclient` should mirror its public API, semantics, logging levels (e.g. `SetLogLevel` / `SetLogAPICalls`, where `"warn"` shows API calls), and naming as closely as possible.
+- Before changing or adding behaviour, check how matterclient does it and follow it unless the Matrix protocol requires otherwise; document any deliberate difference in a comment.
+- Consumers (e.g. matterircd `bridge/matrix` vs `bridge/mattermost`) should be able to treat both clients the same way, so fix differences here rather than working around them downstream.
+
 ## When Reviewing Pull Requests
 
 - Lead with the most critical issue first. Do not bury blockers under minor nits or formatting notes.
