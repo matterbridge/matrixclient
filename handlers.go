@@ -11,6 +11,8 @@ import (
 	"maunium.net/go/mautrix/id"
 )
 
+const redactedTypeTimeout = 5 * time.Second
+
 func (c *Client) channelLocked(roomID id.RoomID) *Channel {
 	ch, ok := c.channels[roomID]
 	if !ok {
@@ -549,11 +551,27 @@ func (c *Client) handleRedaction(_ context.Context, ev *event.Event) {
 	}
 
 	h.OnRedaction(&Redaction{
-		RoomID:   ev.RoomID,
-		TargetID: targetID,
-		Sender:   ev.Sender,
-		Direct:   c.IsDirect(ev.RoomID),
+		RoomID:     ev.RoomID,
+		TargetID:   targetID,
+		Sender:     ev.Sender,
+		Direct:     c.IsDirect(ev.RoomID),
+		TargetType: c.redactedType(ev.RoomID, targetID),
 	})
+}
+
+// redactedType returns the type of a redacted event, "" if it cannot be fetched.
+// Redaction keeps the event type, so it tells a message from a reaction even for
+// events this client never saw.
+func (c *Client) redactedType(roomID id.RoomID, eventID id.EventID) event.Type {
+	ctx, cancel := context.WithTimeout(c.ctx, redactedTypeTimeout)
+	defer cancel()
+
+	target, err := c.mc.GetEvent(ctx, roomID, eventID)
+	if err != nil || target == nil {
+		return event.Type{}
+	}
+
+	return target.Type
 }
 
 func (c *Client) handleTyping(_ context.Context, ev *event.Event) {

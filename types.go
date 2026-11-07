@@ -134,6 +134,9 @@ type Redaction struct {
 	TargetID id.EventID
 	Sender   id.UserID
 	Direct   bool
+	// TargetType is the type of the redacted event, which a redaction keeps. It is
+	// event.EventReaction for a removed reaction, and empty when the lookup failed.
+	TargetType event.Type
 }
 
 // Typing is the full list of users currently typing in a room, excluding ourselves.
