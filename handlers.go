@@ -535,7 +535,7 @@ func (c *Client) handleReaction(_ context.Context, ev *event.Event) {
 	})
 }
 
-func (c *Client) handleRedaction(_ context.Context, ev *event.Event) {
+func (c *Client) handleRedaction(ctx context.Context, ev *event.Event) {
 	h, ok := c.handler.(RedactionHandler)
 	if !ok || !c.synced.Load() {
 		return
@@ -555,15 +555,15 @@ func (c *Client) handleRedaction(_ context.Context, ev *event.Event) {
 		TargetID:   targetID,
 		Sender:     ev.Sender,
 		Direct:     c.IsDirect(ev.RoomID),
-		TargetType: c.redactedType(ev.RoomID, targetID),
+		TargetType: c.redactedType(ctx, ev.RoomID, targetID),
 	})
 }
 
 // redactedType returns the type of a redacted event, "" if it cannot be fetched.
 // Redaction keeps the event type, so it tells a message from a reaction even for
 // events this client never saw.
-func (c *Client) redactedType(roomID id.RoomID, eventID id.EventID) event.Type {
-	ctx, cancel := context.WithTimeout(c.ctx, redactedTypeTimeout)
+func (c *Client) redactedType(ctx context.Context, roomID id.RoomID, eventID id.EventID) event.Type {
+	ctx, cancel := context.WithTimeout(ctx, redactedTypeTimeout)
 	defer cancel()
 
 	target, err := c.mc.GetEvent(ctx, roomID, eventID)
