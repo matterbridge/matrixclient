@@ -301,6 +301,7 @@ func (c *Client) register(s *mautrix.DefaultSyncer) {
 	s.OnEventType(event.EventRedaction, c.handleRedaction)
 	s.OnEventType(event.EphemeralEventTyping, c.handleTyping)
 	onState(event.StateTopic, c.handleTopic)
+	onState(event.StatePinnedEvents, c.handlePinnedEvents)
 	onState(event.StateCreate, c.handleCreate)
 	onState(event.StateEncryption, c.handleEncryption)
 	onState(event.StateSpaceChild, c.handleSpaceChild)

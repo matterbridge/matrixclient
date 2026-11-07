@@ -76,6 +76,8 @@ type Channel struct {
 	selfJoined   bool        // we are joined, as last seen in our member event
 	nameEpoch    uint64      // incremented when we join or leave, lookups of an older epoch are discarded
 
+	pinned []id.EventID // last seen m.room.pinned_events list, diffed to report pins and unpins
+
 	LastActivity int64      // timestamp in milliseconds of the newest message seen, 0 if none
 	LastEventID  id.EventID // newest message event seen, set during the initial sync as well
 
@@ -166,6 +168,14 @@ type TopicChange struct {
 	RoomID id.RoomID
 	Sender id.UserID
 	Topic  string
+}
+
+// PinChange is a message that was pinned or unpinned in a room.
+type PinChange struct {
+	RoomID  id.RoomID
+	EventID id.EventID
+	Sender  id.UserID
+	Pinned  bool // false when the message was unpinned
 }
 
 // Reaction is an incoming reaction to an event. Reactions from ourselves are
@@ -260,6 +270,12 @@ type RoomNameHandler interface {
 // changes. Changes from the initial sync are not delivered.
 type TopicHandler interface {
 	OnTopic(t *TopicChange)
+}
+
+// PinHandler can optionally be implemented by a Handler to receive pinned and
+// unpinned messages. Changes from the initial sync are not delivered.
+type PinHandler interface {
+	OnPin(p *PinChange)
 }
 
 // TypingHandler can optionally be implemented by a Handler to receive typing notifications.
