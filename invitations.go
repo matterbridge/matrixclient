@@ -91,7 +91,7 @@ func (c *Client) syncInvitations(_ context.Context, res *mautrix.RespSync, _ str
 
 // persistAcceptedDirect records a joined direct invitation in m.direct, which
 // the homeserver does not do, so the DM association survives a restart.
-func (c *Client) persistAcceptedDirect(roomID id.RoomID) {
+func (c *Client) persistAcceptedDirect(ctx context.Context, roomID id.RoomID) {
 	c.Lock()
 
 	var userID id.UserID
@@ -112,7 +112,7 @@ func (c *Client) persistAcceptedDirect(roomID id.RoomID) {
 		c.pendingDirect[roomID] = pendingAssoc{user: userID}
 	}
 
-	c.queueDirectLocked(roomID)
+	c.queueDirectLocked(ctx, roomID)
 	c.Unlock()
 }
 
@@ -120,7 +120,7 @@ func (c *Client) persistAcceptedDirect(roomID id.RoomID) {
 // neither written nor already queued, so concurrent callers do not pile up on
 // directWriteMu. The write outlives the calling request, but not the client, and is
 // bounded by a timeout. The client lock must be held.
-func (c *Client) queueDirectLocked(roomID id.RoomID) {
+func (c *Client) queueDirectLocked(ctx context.Context, roomID id.RoomID) {
 	p, ok := c.pendingDirect[roomID]
 	if !ok || p.written || p.writing {
 		return
@@ -129,11 +129,15 @@ func (c *Client) queueDirectLocked(roomID id.RoomID) {
 	p.writing = true
 	c.pendingDirect[roomID] = p
 
-	go func() {
-		ctx, cancel := context.WithTimeout(c.ctx, directWriteTimeout)
-		defer cancel()
+	// Detached from the caller's cancellation, but still cancelled with the client.
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), directWriteTimeout)
+	stop := context.AfterFunc(c.ctx, cancel)
 
-		c.recordDirect(ctx, p.user, roomID)
+	go func() {
+		defer cancel()
+		defer stop()
+
+		c.recordDirect(wctx, p.user, roomID)
 	}()
 }
 
