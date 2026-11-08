@@ -129,9 +129,9 @@ func (c *Client) queueDirectLocked(ctx context.Context, roomID id.RoomID) {
 	p.writing = true
 	c.pendingDirect[roomID] = p
 
-	// Detached from the caller's cancellation, but still cancelled with the client.
+	// Detached from the caller's cancellation, but still canceled with the client.
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), directWriteTimeout)
-	stop := context.AfterFunc(c.ctx, cancel)
+	stop := context.AfterFunc(c.ctx, cancel) //nolint:contextcheck // the client lifecycle context is deliberate
 
 	go func() {
 		defer cancel()
