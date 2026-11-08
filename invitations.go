@@ -104,9 +104,10 @@ func (c *Client) persistAcceptedDirect(ctx context.Context, roomID id.RoomID) {
 		return
 	}
 
+	c.pendingDirect[roomID] = pendingAssoc{user: userID}
 	c.Unlock()
 
-	c.recordDirect(ctx, userID, roomID)
+	go c.recordDirect(c.ctx, userID, roomID)
 }
 
 // recordDirect persists roomID as a direct room of userID. The homeserver does not set

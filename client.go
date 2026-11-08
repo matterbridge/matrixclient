@@ -876,9 +876,14 @@ func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.E
 		c.doneCreatingDirectLocked(userID)
 		c.Unlock()
 
-		c.recordDirect(ctx, userID, roomID)
+		go c.recordDirect(c.ctx, userID, roomID)
 	} else {
-		c.retryDirect(ctx, roomID)
+		c.RLock()
+		p, ok := c.pendingDirect[roomID]
+		c.RUnlock()
+		if ok && !p.written {
+			go c.recordDirect(c.ctx, p.user, roomID)
+		}
 	}
 
 	return c.Send(ctx, roomID, parentID, text)
