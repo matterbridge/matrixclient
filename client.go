@@ -874,16 +874,12 @@ func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.E
 		c.pendingDirect[roomID] = pendingAssoc{user: userID}
 		c.addDirectLocked(roomID, userID)
 		c.doneCreatingDirectLocked(userID)
+		c.queueDirectLocked(ctx, roomID)
 		c.Unlock()
-
-		go c.recordDirect(c.ctx, userID, roomID)
 	} else {
-		c.RLock()
-		p, ok := c.pendingDirect[roomID]
-		c.RUnlock()
-		if ok && !p.written {
-			go c.recordDirect(c.ctx, p.user, roomID)
-		}
+		c.Lock()
+		c.queueDirectLocked(ctx, roomID)
+		c.Unlock()
 	}
 
 	return c.Send(ctx, roomID, parentID, text)
