@@ -723,7 +723,7 @@ func (c *Client) Join(ctx context.Context, roomIDOrAlias string) (id.RoomID, err
 		return "", err
 	}
 
-	c.persistAcceptedDirect(ctx, resp.RoomID)
+	c.persistAcceptedDirect(resp.RoomID)
 
 	return resp.RoomID, nil
 }
@@ -874,11 +874,11 @@ func (c *Client) SendDirect(ctx context.Context, userID id.UserID, parentID id.E
 		c.pendingDirect[roomID] = pendingAssoc{user: userID}
 		c.addDirectLocked(roomID, userID)
 		c.doneCreatingDirectLocked(userID)
-		c.queueDirectLocked(ctx, roomID)
+		c.queueDirectLocked(roomID)
 		c.Unlock()
 	} else {
 		c.Lock()
-		c.queueDirectLocked(ctx, roomID)
+		c.queueDirectLocked(roomID)
 		c.Unlock()
 	}
 

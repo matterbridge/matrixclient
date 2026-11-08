@@ -91,7 +91,7 @@ func (c *Client) syncInvitations(_ context.Context, res *mautrix.RespSync, _ str
 
 // persistAcceptedDirect records a joined direct invitation in m.direct, which
 // the homeserver does not do, so the DM association survives a restart.
-func (c *Client) persistAcceptedDirect(ctx context.Context, roomID id.RoomID) {
+func (c *Client) persistAcceptedDirect(roomID id.RoomID) {
 	c.Lock()
 
 	var userID id.UserID
@@ -112,15 +112,15 @@ func (c *Client) persistAcceptedDirect(ctx context.Context, roomID id.RoomID) {
 		c.pendingDirect[roomID] = pendingAssoc{user: userID}
 	}
 
-	c.queueDirectLocked(ctx, roomID)
+	c.queueDirectLocked(roomID)
 	c.Unlock()
 }
 
 // queueDirectLocked persists roomID's pending association in the background, if it is
 // neither written nor already queued, so concurrent callers do not pile up on
-// directWriteMu. The write outlives the caller's ctx, but is bounded by a timeout.
-// The client lock must be held.
-func (c *Client) queueDirectLocked(ctx context.Context, roomID id.RoomID) {
+// directWriteMu. The write outlives the calling request, but not the client, and is
+// bounded by a timeout. The client lock must be held.
+func (c *Client) queueDirectLocked(roomID id.RoomID) {
 	p, ok := c.pendingDirect[roomID]
 	if !ok || p.written || p.writing {
 		return
@@ -129,13 +129,11 @@ func (c *Client) queueDirectLocked(ctx context.Context, roomID id.RoomID) {
 	p.writing = true
 	c.pendingDirect[roomID] = p
 
-	wctx := context.WithoutCancel(ctx)
-
 	go func() {
-		wctx, cancel := context.WithTimeout(wctx, directWriteTimeout)
+		ctx, cancel := context.WithTimeout(c.ctx, directWriteTimeout)
 		defer cancel()
 
-		c.recordDirect(wctx, roomID)
+		c.recordDirect(ctx, p.user, roomID)
 	}()
 }
 
@@ -145,16 +143,18 @@ func (c *Client) queueDirectLocked(ctx context.Context, roomID id.RoomID) {
 // handleDM observes it in a synced snapshot, so a delayed older snapshot cannot make a
 // later write erase it, and a failed write is retried by later calls.
 //
-// The room must already be in pendingDirect, see queueDirectLocked.
-func (c *Client) recordDirect(ctx context.Context, roomID id.RoomID) {
+// The room must already be in pendingDirect, see queueDirectLocked. If the association
+// is replaced meanwhile (another inviter), userID no longer matches and this write
+// neither marks it written nor clears its queued flag.
+func (c *Client) recordDirect(ctx context.Context, userID id.UserID, roomID id.RoomID) {
 	c.directWriteMu.Lock()
 	defer c.directWriteMu.Unlock()
 
-	defer c.clearDirectWriting(roomID)
+	defer c.clearDirectWriting(userID, roomID)
 
 	c.Lock()
 	// Already written or confirmed by a sync while queued, nothing to do.
-	if p, ok := c.pendingDirect[roomID]; !ok || p.written {
+	if p, ok := c.pendingDirect[roomID]; !ok || p.user != userID || p.written {
 		c.Unlock()
 
 		return
@@ -166,7 +166,7 @@ func (c *Client) recordDirect(ctx context.Context, roomID id.RoomID) {
 		direct = make(map[id.UserID][]id.RoomID)
 	}
 
-	unwritten := make([]id.RoomID, 0, len(c.pendingDirect))
+	unwritten := make(map[id.RoomID]id.UserID, len(c.pendingDirect))
 
 	for pendingRoom, p := range c.pendingDirect {
 		if slices.Contains(direct[p.user], pendingRoom) {
@@ -178,7 +178,7 @@ func (c *Client) recordDirect(ctx context.Context, roomID id.RoomID) {
 		direct[p.user] = append(slices.Clone(direct[p.user]), pendingRoom)
 
 		if !p.written {
-			unwritten = append(unwritten, pendingRoom)
+			unwritten[pendingRoom] = p.user
 		}
 	}
 	c.Unlock()
@@ -195,8 +195,8 @@ func (c *Client) recordDirect(ctx context.Context, roomID id.RoomID) {
 	}
 
 	c.Lock()
-	for _, pendingRoom := range unwritten {
-		if p, ok := c.pendingDirect[pendingRoom]; ok {
+	for pendingRoom, user := range unwritten {
+		if p, ok := c.pendingDirect[pendingRoom]; ok && p.user == user {
 			p.written = true
 			c.pendingDirect[pendingRoom] = p
 		}
@@ -205,11 +205,11 @@ func (c *Client) recordDirect(ctx context.Context, roomID id.RoomID) {
 }
 
 // clearDirectWriting marks roomID's queued write as finished, so a failed one can be queued again.
-func (c *Client) clearDirectWriting(roomID id.RoomID) {
+func (c *Client) clearDirectWriting(userID id.UserID, roomID id.RoomID) {
 	c.Lock()
 	defer c.Unlock()
 
-	if p, ok := c.pendingDirect[roomID]; ok {
+	if p, ok := c.pendingDirect[roomID]; ok && p.user == userID {
 		p.writing = false
 		c.pendingDirect[roomID] = p
 	}
