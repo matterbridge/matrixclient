@@ -106,6 +106,7 @@ func newAPILogTransport(next http.RoundTripper, logger *logrus.Entry) http.Round
 	return &apiLogTransport{next: next, logger: logger}
 }
 
+//nolint:funlen
 func (t *apiLogTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
 
