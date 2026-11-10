@@ -387,6 +387,7 @@ type readySyncer struct {
 	failures int // consecutive failed syncs, only used from the sync goroutine
 }
 
+//nolint:funlen
 func (r *readySyncer) ProcessResponse(ctx context.Context, res *mautrix.RespSync, since string) error {
 	start := time.Now()
 
@@ -398,64 +399,66 @@ func (r *readySyncer) ProcessResponse(ctx context.Context, res *mautrix.RespSync
 	syncerStart := time.Now()
 
 	err := r.DefaultSyncer.ProcessResponse(ctx, res, since)
-	if err == nil {
-		syncerDuration := time.Since(syncerStart)
+	if err != nil {
+		return err
+	}
 
-		if r.failures > 0 {
-			var reqDuration time.Duration
-			if r.syncDuration != nil {
-				reqDuration = time.Duration(r.syncDuration.Load())
-			}
+	syncerDuration := time.Since(syncerStart)
 
-			if reqDuration > 0 {
-				r.logger.Infof("sync recovered after %d failure(s) (request: %s)", r.failures, reqDuration)
-			} else {
-				r.logger.Infof("sync recovered after %d failure(s)", r.failures)
-			}
+	if r.failures > 0 {
+		var reqDuration time.Duration
+		if r.syncDuration != nil {
+			reqDuration = time.Duration(r.syncDuration.Load())
 		}
 
-		r.failures = 0
-
-		postStart := time.Now()
-
-		r.leftInvites(res)
-		r.synced()
-
-		postDuration := time.Since(postStart)
-		namedStart := time.Now()
-
-		r.named(res)
-
-		namedDuration := time.Since(namedStart)
-		readyStart := time.Now()
-
-		r.once.Do(r.ready)
-
-		readyDuration := time.Since(readyStart)
-		totalDuration := time.Since(start)
-
-		if since == "" {
-			r.logger.Infof("initial sync processed in %s (prep: %s, syncer: %s, named: %s, post: %s, ready: %s)",
-				totalDuration.Round(time.Millisecond),
-				prepDuration.Round(time.Millisecond),
-				syncerDuration.Round(time.Millisecond),
-				namedDuration.Round(time.Millisecond),
-				postDuration.Round(time.Millisecond),
-				readyDuration.Round(time.Millisecond),
-			)
-		} else if totalDuration > 500*time.Millisecond {
-			r.logger.Debugf("sync processed in %s (prep: %s, syncer: %s, named: %s, post: %s, ready: %s)",
-				totalDuration.Round(time.Millisecond),
-				prepDuration.Round(time.Millisecond),
-				syncerDuration.Round(time.Millisecond),
-				namedDuration.Round(time.Millisecond),
-				postDuration.Round(time.Millisecond),
-				readyDuration.Round(time.Millisecond),
-			)
+		if reqDuration > 0 {
+			r.logger.Infof("sync recovered after %d failure(s) (request: %s)", r.failures, reqDuration)
+		} else {
+			r.logger.Infof("sync recovered after %d failure(s)", r.failures)
 		}
 	}
 
-	return err
+	r.failures = 0
+
+	postStart := time.Now()
+
+	r.leftInvites(res)
+	r.synced()
+
+	postDuration := time.Since(postStart)
+	namedStart := time.Now()
+
+	r.named(res)
+
+	namedDuration := time.Since(namedStart)
+	readyStart := time.Now()
+
+	r.once.Do(r.ready)
+
+	readyDuration := time.Since(readyStart)
+	totalDuration := time.Since(start)
+
+	if since == "" {
+		r.logger.Infof("initial sync processed in %s (prep: %s, syncer: %s, named: %s, post: %s, ready: %s)",
+			totalDuration.Round(time.Millisecond),
+			prepDuration.Round(time.Millisecond),
+			syncerDuration.Round(time.Millisecond),
+			namedDuration.Round(time.Millisecond),
+			postDuration.Round(time.Millisecond),
+			readyDuration.Round(time.Millisecond),
+		)
+	} else if totalDuration > 500*time.Millisecond {
+		r.logger.Debugf("sync processed in %s (prep: %s, syncer: %s, named: %s, post: %s, ready: %s)",
+			totalDuration.Round(time.Millisecond),
+			prepDuration.Round(time.Millisecond),
+			syncerDuration.Round(time.Millisecond),
+			namedDuration.Round(time.Millisecond),
+			postDuration.Round(time.Millisecond),
+			readyDuration.Round(time.Millisecond),
+		)
+	}
+
+	return nil
 }
 
 // OnFailedSync retries quickly at first, then backs off exponentially with

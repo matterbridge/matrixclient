@@ -112,7 +112,7 @@ func newAPILogTransport(next http.RoundTripper, logger *logrus.Entry, syncDurati
 	}
 }
 
-//nolint:funlen
+//nolint:funlen,gocyclo
 func (t *apiLogTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
 
