@@ -300,6 +300,17 @@ type TypingHandler interface {
 	OnTyping(t *Typing)
 }
 
+// PresenceChange is emitted when a user's presence updates during sync.
+type PresenceChange struct {
+	UserID id.UserID
+	Status string
+}
+
+// PresenceHandler can optionally be implemented by a Handler to receive presence updates.
+type PresenceHandler interface {
+	OnPresence(p *PresenceChange)
+}
+
 // ReconnectHandler can optionally be implemented by a Handler to be notified
 // when the sync loop recovers after a disconnection. downtime is the elapsed
 // time since the previous successful sync (0 if unknown).

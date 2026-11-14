@@ -426,7 +426,11 @@ func (c *Client) GetStatuses() map[id.UserID]string {
 
 	statuses := make(map[id.UserID]string, len(c.presence))
 	for userID, p := range c.presence {
-		statuses[userID] = p.Status
+		if p.StatusMsg != "" {
+			statuses[userID] = p.Status + ": " + p.StatusMsg
+		} else {
+			statuses[userID] = p.Status
+		}
 	}
 
 	return statuses
@@ -578,7 +582,7 @@ func (c *Client) loadTimezone(tz string) *time.Location {
 	return loaded
 }
 
-func (c *Client) setPresence(userID id.UserID, p event.Presence, msg string, agoMS int64) {
+func (c *Client) setPresence(userID id.UserID, p event.Presence, msg string, agoMS int64) string {
 	status := StatusOffline
 
 	switch p {
@@ -596,6 +600,8 @@ func (c *Client) setPresence(userID id.UserID, p event.Presence, msg string, ago
 	c.Lock()
 	c.presence[c.userIDKeyLocked(userID)] = Presence{Status: status, StatusMsg: msg, LastActivityAt: last}
 	c.Unlock()
+
+	return status
 }
 
 func (c *Client) handlePresence(_ context.Context, ev *event.Event) {
@@ -604,7 +610,14 @@ func (c *Client) handlePresence(_ context.Context, ev *event.Event) {
 		return
 	}
 
-	c.setPresence(ev.Sender, content.Presence, content.StatusMessage, content.LastActiveAgo)
+	status := c.setPresence(ev.Sender, content.Presence, content.StatusMessage, content.LastActiveAgo)
+
+	if h, ok := c.handler.(PresenceHandler); ok && c.synced.Load() {
+		h.OnPresence(&PresenceChange{
+			UserID: ev.Sender,
+			Status: status,
+		})
+	}
 }
 
 func (c *Client) handlePinnedEvents(_ context.Context, ev *event.Event) {
