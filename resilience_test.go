@@ -44,7 +44,7 @@ func TestOnSyncedReconnect(t *testing.T) {
 		t.Fatalf("unexpected downtime %v, want ~20m", downtime)
 	}
 
-	c.notifyReconnect(downtime)
+	c.notifyReconnect(ReconnectInfo{Downtime: downtime})
 
 	if len(h.reconnects) != 1 || h.reconnects[0] != downtime {
 		t.Fatalf("got reconnects %v, want [%v]", h.reconnects, downtime)
