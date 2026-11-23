@@ -3,6 +3,7 @@ module github.com/matterbridge/matrixclient
 go 1.26.0
 
 require (
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/matterbridge/logrus-prefixed-formatter v0.5.3-0.20200523233437-d971309a77ba
 	github.com/ncruces/go-sqlite3 v0.38.0
 	github.com/sirupsen/logrus v1.9.4
